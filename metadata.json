@@ -1,0 +1,6 @@
+{
+  "name": "پرهام",
+  "description": "پلتفرم چت خصوصی تحت وب با پشتیبانی از رمزنگاری سرتاسری (E2EE)، سیستم تایید هویت دو مرحله‌ای (2FA)، گروه‌ها و کانال‌های خصوصی، ارسال فایل حجیم و ویس‌نوت به همراه واکنش با ایموجی.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

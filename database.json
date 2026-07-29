@@ -1,0 +1,98 @@
+{
+  "users": {
+    "usr_parham": {
+      "id": "usr_parham",
+      "username": "parham",
+      "nickname": "پرهام (مدیریت کل سیستم)",
+      "bio": "مالک اصلی سیستم با دسترسی کامل و نظارت بر کاربران",
+      "avatarColor": "bg-amber-600",
+      "avatarEmoji": "👑",
+      "theme": "telegram",
+      "passwordHash": "2ba52d4b1ee6bf5f1097b0d972ee4af6d67778f1c79872fc5776a0eb06d591ad",
+      "salt": "56776d276a26bdd4ac9983f855282dc5",
+      "twoFactorSecret": "MTIzNDU2Nzg5MDEyMzQ1Ng==",
+      "isTwoFactorEnabled": false,
+      "publicKey": "",
+      "blockedUsers": [],
+      "isOnline": true,
+      "lastSeen": "2026-07-18T13:37:12.943Z",
+      "role": "owner"
+    },
+    "usr_parham_ai": {
+      "id": "usr_parham_ai",
+      "username": "parham_ai",
+      "nickname": "پرهام AI (هوش مصنوعی)",
+      "bio": "دستیار هوشمند چت و حل مسائل شما مجهز به مدل پیشرفته Gemini. کافیست برای گفتگو با من یک چت خصوصی شروع کنید!",
+      "avatarColor": "bg-gradient-to-tr from-cyan-500 to-blue-600",
+      "avatarEmoji": "🤖",
+      "theme": "telegram",
+      "passwordHash": "",
+      "salt": "",
+      "twoFactorSecret": "",
+      "isTwoFactorEnabled": false,
+      "publicKey": "PUB_DET_parham_ai_public_key_marker",
+      "blockedUsers": [],
+      "isOnline": true,
+      "lastSeen": "2026-07-18T10:48:07.776Z",
+      "role": "assistant"
+    }
+  },
+  "messages": [
+    {
+      "id": "opt_2kazqfp",
+      "chatId": "saved_usr_parham",
+      "content": "ENC_SIM:tehqNNV5lek=",
+      "type": "text",
+      "isEncrypted": true,
+      "senderId": "usr_parham",
+      "senderNickname": "پرهام (مدیریت کل سیستم)",
+      "timestamp": "2026-07-18T12:59:57.215Z",
+      "reactions": {},
+      "status": "sent"
+    }
+  ],
+  "chats": [
+    {
+      "id": "global-group",
+      "name": "گروه عمومی ایرانیان (پیش‌فرض)",
+      "type": "group",
+      "creatorId": "system",
+      "avatarColor": "bg-indigo-600",
+      "avatarEmoji": "🔥",
+      "members": [
+        "usr_parham"
+      ],
+      "description": "مکانی برای گفتگوی عمومی تمام کاربران این فضا به صورت سراسری"
+    },
+    {
+      "id": "saved_usr_parham",
+      "name": "پیام‌های ذخیره شده",
+      "type": "direct",
+      "creatorId": "usr_parham",
+      "avatarColor": "bg-indigo-600",
+      "avatarEmoji": "💾",
+      "members": [
+        "usr_parham"
+      ],
+      "description": "فضای شخصی شما برای یادداشت‌ها، پیام‌ها و ذخیره رسانه‌ها",
+      "lastMessageText": "ENC_SIM:tehqNNV5lek=",
+      "lastMessageTime": "2026-07-18T12:59:57.215Z"
+    },
+    {
+      "id": "chat_1784379854479_2gszt",
+      "name": "پرهام AI (هوش مصنوعی)",
+      "type": "direct",
+      "creatorId": "usr_parham",
+      "avatarColor": "bg-gradient-to-tr from-cyan-500 to-blue-600",
+      "avatarEmoji": "🤖",
+      "members": [
+        "usr_parham",
+        "usr_parham_ai"
+      ],
+      "description": "گفتگوی خصوصی دو نفره با پرهام AI (هوش مصنوعی)",
+      "lastMessageText": "گفتگو آغاز شد",
+      "lastMessageTime": "2026-07-18T13:04:14.479Z"
+    }
+  ],
+  "reports": []
+}

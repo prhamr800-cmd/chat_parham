@@ -1,0 +1,94 @@
+{
+  "entities": {
+    "users": {
+      "title": "Users",
+      "description": "Registered users on Parham Messenger",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nickname": { "type": "string" },
+        "username": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "salt": { "type": "string" },
+        "avatarColor": { "type": "string" },
+        "avatarEmoji": { "type": "string" },
+        "bio": { "type": "string" },
+        "role": { "type": "string" },
+        "isOnline": { "type": "boolean" },
+        "lastSeen": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "blockedUsers": { "type": "array", "items": { "type": "string" } },
+        "isFiltered": { "type": "boolean" },
+        "isAppPasscodeEnabled": { "type": "boolean" },
+        "passcodeHash": { "type": "string" },
+        "passcodeSalt": { "type": "string" },
+        "sessions": { "type": "array" }
+      },
+      "required": ["id", "username", "nickname"]
+    },
+    "chats": {
+      "title": "Chats",
+      "description": "Direct, group, and channel chats",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "avatarColor": { "type": "string" },
+        "avatarEmoji": { "type": "string" },
+        "members": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" },
+        "lastMessageText": { "type": "string" },
+        "lastMessageTime": { "type": "string" }
+      },
+      "required": ["id", "type", "members"]
+    },
+    "messages": {
+      "title": "Messages",
+      "description": "Messages sent in chats",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "chatId": { "type": "string" },
+        "content": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderNickname": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "status": { "type": "string" },
+        "type": { "type": "string" },
+        "fileUrl": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileType": { "type": "string" },
+        "isEncrypted": { "type": "boolean" },
+        "deletedFor": { "type": "array", "items": { "type": "string" } },
+        "isPinned": { "type": "boolean" },
+        "isEdited": { "type": "boolean" }
+      },
+      "required": ["id", "chatId", "senderId", "timestamp"]
+    },
+    "reports": {
+      "title": "Reports",
+      "description": "User reports for moderation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reporterId": { "type": "string" },
+        "targetType": { "type": "string" },
+        "targetId": { "type": "string" },
+        "reason": { "type": "string" },
+        "timestamp": { "type": "string" }
+      }
+    },
+    "systemSettings": {
+      "title": "System Settings",
+      "description": "Global settings for the application",
+      "type": "object",
+      "properties": {
+        "aiSystemInstructions": { "type": "string" },
+        "isRegistrationOpen": { "type": "boolean" },
+        "maxUploadSizeBytes": { "type": "number" }
+      }
+    }
+  }
+}
