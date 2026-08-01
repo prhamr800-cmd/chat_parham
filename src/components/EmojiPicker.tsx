@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from "react";
-import { Search, Smile, Heart, Leaf, Coffee, Trophy, Car, Lightbulb, HelpCircle } from "lucide-react";
+import React, { useState, useMemo, useEffect } from "react";
+import { Search, Smile, Heart, Leaf, Coffee, Trophy, Car, Lightbulb, HelpCircle, Clock } from "lucide-react";
 import { motion } from "motion/react";
 
 interface EmojiPickerProps {
@@ -656,12 +656,56 @@ const EMOJI_CATEGORIES: EmojiCategory[] = [
 ];
 
 export default function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
-  const [activeCategory, setActiveCategory] = useState<string>("smileys");
+  const [activeCategory, setActiveCategory] = useState<string>("recent");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [recentEmojis, setRecentEmojis] = useState<string[]>([]);
+
+  // Load recent emojis on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("parham_recent_emojis");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setRecentEmojis(parsed);
+          setActiveCategory("recent");
+          return;
+        }
+      }
+    } catch (e) {}
+    setActiveCategory("smileys");
+  }, []);
+
+  const handleSelectEmoji = (char: string) => {
+    // Save to recent emojis
+    setRecentEmojis(prev => {
+      const filtered = prev.filter(e => e !== char);
+      const updated = [char, ...filtered].slice(0, 24);
+      try {
+        localStorage.setItem("parham_recent_emojis", JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+
+    onSelect(char);
+  };
+
+  const categoriesWithRecent = useMemo(() => {
+    const recentCat: EmojiCategory = {
+      id: "recent",
+      name: "ایموجی‌های اخیر",
+      icon: <Clock className="w-4 h-4 text-amber-400" />,
+      emojis: recentEmojis.map(e => ({ char: e, tags: "اخیر recent" }))
+    };
+    return [recentCat, ...EMOJI_CATEGORIES];
+  }, [recentEmojis]);
 
   // Handle category change or filter emojis by search query
   const displayedEmojis = useMemo(() => {
     if (!searchQuery.trim()) {
+      if (activeCategory === "recent") {
+        return recentEmojis.map(e => ({ char: e, tags: "اخیر recent" }));
+      }
       const category = EMOJI_CATEGORIES.find(c => c.id === activeCategory);
       return category ? category.emojis : [];
     }
@@ -672,24 +716,26 @@ export default function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
     EMOJI_CATEGORIES.forEach(cat => {
       cat.emojis.forEach(emoji => {
         if (emoji.tags.toLowerCase().includes(normalizedQuery)) {
-          results.push(emoji);
+          if (!results.some(r => r.char === emoji.char)) {
+            results.push(emoji);
+          }
         }
       });
     });
     return results;
-  }, [activeCategory, searchQuery]);
+  }, [activeCategory, searchQuery, recentEmojis]);
 
   return (
-    <div className="flex flex-col h-72 w-72 sm:w-80 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-right dir-rtl select-none" dir="rtl">
+    <div className="flex flex-col h-80 w-72 sm:w-80 bg-slate-900/95 border border-slate-700/80 rounded-2xl shadow-2xl backdrop-blur-md overflow-hidden text-right dir-rtl select-none" dir="rtl">
       {/* Search Input */}
-      <div className="p-2 border-b border-slate-800/80 bg-slate-950/40 flex items-center gap-2 relative">
-        <Search className="w-3.5 h-3.5 text-slate-500 absolute right-4 top-4" />
+      <div className="p-2 border-b border-slate-800/80 bg-slate-950/60 flex items-center gap-2 relative">
+        <Search className="w-3.5 h-3.5 text-slate-500 absolute right-4 top-3.5" />
         <input
           type="text"
-          placeholder="جستجوی ایموجی (مثلا: قلب، خنده، لایک)..."
+          placeholder="جستجوی سریع ایموجی (قلب، خنده، لایک)..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full pr-8 pl-8 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-[11px] text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+          className="w-full pr-8 pl-8 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-[11px] text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
         />
         {searchQuery && (
           <button
@@ -704,13 +750,13 @@ export default function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
 
       {/* Category Tabs (Hidden if searching) */}
       {!searchQuery && (
-        <div className="flex items-center gap-1 p-1 bg-slate-950/20 border-b border-slate-800/40 overflow-x-auto custom-scrollbar">
-          {EMOJI_CATEGORIES.map(cat => (
+        <div className="flex items-center gap-1 p-1.5 bg-slate-950/40 border-b border-slate-800/60 overflow-x-auto custom-scrollbar shrink-0">
+          {categoriesWithRecent.map(cat => (
             <button
               key={cat.id}
               type="button"
               onClick={() => setActiveCategory(cat.id)}
-              className={`p-1.5 rounded-lg transition shrink-0 ${activeCategory === cat.id ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"}`}
+              className={`p-1.5 rounded-xl transition shrink-0 flex items-center justify-center ${activeCategory === cat.id ? "bg-indigo-600 text-white shadow-md scale-105" : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"}`}
               title={cat.name}
             >
               {cat.icon}
@@ -719,12 +765,41 @@ export default function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
         </div>
       )}
 
+      {/* Category Name Banner */}
+      {!searchQuery && (
+        <div className="px-3 py-1 bg-slate-950/20 text-[10px] font-bold text-slate-400 flex items-center justify-between border-b border-slate-800/30">
+          <span>{categoriesWithRecent.find(c => c.id === activeCategory)?.name || "ایموجی‌ها"}</span>
+          {activeCategory === "recent" && recentEmojis.length > 0 && (
+            <button
+              onClick={() => {
+                setRecentEmojis([]);
+                localStorage.removeItem("parham_recent_emojis");
+                setActiveCategory("smileys");
+              }}
+              className="text-[9px] text-rose-400 hover:text-rose-300 transition"
+            >
+              پاکسازی اخیر
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Emoji Grid */}
       <div className="flex-1 overflow-y-auto custom-scrollbar p-2.5">
         {displayedEmojis.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-500 text-[10px] py-8 text-center">
-            <span>ایموجی یافت نشد!</span>
-            <span className="mt-1 text-[8px] text-slate-600">کلمات کلیدی دیگری را امتحان کنید.</span>
+            {activeCategory === "recent" && !searchQuery ? (
+              <>
+                <Clock className="w-8 h-8 text-slate-600 mb-2 opacity-50" />
+                <span className="font-bold text-slate-400">هنوز ایموجی اخیری ثبت نشده است</span>
+                <span className="mt-1 text-[9px] text-slate-500">هر ایموجی که استفاده کنید به این بخش اضافه می‌شود.</span>
+              </>
+            ) : (
+              <>
+                <span>ایموجی یافت نشد!</span>
+                <span className="mt-1 text-[8px] text-slate-600">کلمات کلیدی دیگری را امتحان کنید.</span>
+              </>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-7 sm:grid-cols-8 gap-1.5">
@@ -732,8 +807,8 @@ export default function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
               <button
                 key={`${emoji.char}-${index}`}
                 type="button"
-                onClick={() => onSelect(emoji.char)}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-xl hover:bg-slate-800 active:scale-95 transition-all duration-100"
+                onClick={() => handleSelectEmoji(emoji.char)}
+                className="w-8 h-8 rounded-xl flex items-center justify-center text-xl hover:bg-slate-800 hover:scale-125 active:scale-95 transition-all duration-150 cursor-pointer"
               >
                 {emoji.char}
               </button>
@@ -743,13 +818,13 @@ export default function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
       </div>
 
       {/* Footer */}
-      <div className="px-3 py-1 bg-slate-950/40 border-t border-slate-800/40 flex items-center justify-between">
-        <span className="text-[8px] text-slate-500">مجموعه بزرگ ایموجی‌های پیام‌رسان</span>
+      <div className="px-3 py-1.5 bg-slate-950/60 border-t border-slate-800/60 flex items-center justify-between shrink-0">
+        <span className="text-[9px] text-slate-400 font-medium">مجموعه ایموجی پیام‌رسان</span>
         {onClose && (
           <button
             type="button"
             onClick={onClose}
-            className="text-[9px] text-indigo-400 hover:text-indigo-300 font-bold"
+            className="text-[9px] text-indigo-400 hover:text-indigo-300 font-bold px-1.5 py-0.5 rounded hover:bg-indigo-950/40 transition"
           >
             بستن
           </button>

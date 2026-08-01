@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { 
   Shield, Lock, User, KeyRound, Sparkles, AlertCircle, Fingerprint, 
-  ArrowRight, Check, Copy, RefreshCw, Smartphone
+  ArrowRight, Check, Copy, RefreshCw, Smartphone, Mail, Key, CheckCircle2, HelpCircle
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { generateE2EKeyPair } from "../utils/crypto";
@@ -14,11 +14,22 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState(() => localStorage.getItem("parham_saved_username") || "");
   const [password, setPassword] = useState(() => localStorage.getItem("parham_saved_password") || "");
+  const [email, setEmail] = useState("");
   const [nickname, setNickname] = useState("");
   const [bio, setBio] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   
+  // Forgot Password / OTP Flow States
+  const [forgotPasswordStep, setForgotPasswordStep] = useState<"none" | "request_email" | "enter_otp" | "reset_password">("none");
+  const [resetEmail, setResetEmail] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [resetToken, setResetToken] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [otpSuccessMessage, setOtpSuccessMessage] = useState("");
+  const [devOtpCode, setDevOtpCode] = useState<string | null>(null);
+
   // 2FA variables
   const [show2FA, setShow2FA] = useState(false);
   const [totpCode, setTotpCode] = useState("");
@@ -126,7 +137,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     }, 500);
 
     return () => clearInterval(timer);
-  }, [isLogin]);
+  }, [isLogin, forgotPasswordStep]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -150,13 +161,13 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         throw new Error(data.error || "خطایی در ورود رخ داد.");
       }
 
-        // Successful login without 2FA
-        localStorage.setItem("parham_saved_username", username);
-        localStorage.setItem("parham_saved_password", password);
-        const inMemoryPrivateKey = localStorage.getItem(`e2e_priv_${data.user.id}`) || (await generateE2EKeyPair(username + "_" + password)).privateKey;
-        localStorage.setItem(`e2e_priv_${data.user.id}`, inMemoryPrivateKey);
-        localStorage.setItem("parham_session_id", data.sessionId || "");
-        onAuthSuccess(data.user, inMemoryPrivateKey);
+      // Successful login without 2FA
+      localStorage.setItem("parham_saved_username", username);
+      localStorage.setItem("parham_saved_password", password);
+      const inMemoryPrivateKey = localStorage.getItem(`e2e_priv_${data.user.id}`) || (await generateE2EKeyPair(username + "_" + password)).privateKey;
+      localStorage.setItem(`e2e_priv_${data.user.id}`, inMemoryPrivateKey);
+      localStorage.setItem("parham_session_id", data.sessionId || "");
+      onAuthSuccess(data.user, inMemoryPrivateKey);
     } catch (err: any) {
       setError(err.message || "اتصال به سرور برقرار نشد.");
       setLoading(false);
@@ -165,8 +176,14 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username || !password || !nickname) {
-      setError("وارد کردن نام کاربری، رمز عبور و نام مستعار الزامی است.");
+    if (!username || !password || !nickname || !email) {
+      setError("وارد کردن نام کاربری، آدرس ایمیل، رمز عبور و نام مستعار الزامی است.");
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      setError("لطفاً یک آدرس ایمیل معتبر وارد کنید (مثال: example@gmail.com).");
       return;
     }
 
@@ -177,13 +194,14 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       // 1. Generate client-side E2E Cryptographic Keypair
       const keypair = await generateE2EKeyPair(username + "_" + password);
 
-      // 2. Submit user + client-side public key to server
+      // 2. Submit user + email + client-side public key to server
       const response = await fetch("/api/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username,
           password,
+          email: email.trim(),
           nickname,
           bio,
           avatarColor,
@@ -197,17 +215,131 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         throw new Error(data.error || "خطایی در ثبت نام رخ داد.");
       }
 
-      // Store private key securely locally (E2EE Client rule: private key NEVER leaves user's device!)
+      // Store private key securely locally
       localStorage.setItem("parham_saved_username", username);
       localStorage.setItem("parham_saved_password", password);
       localStorage.setItem(`e2e_priv_${data.user.id}`, keypair.privateKey);
       
-      // Keep keypair in state to show the success message + explain E2EE to user
       setRegisteredKeyPair(keypair);
       setRegistrationResponse(data);
       setLoading(false);
     } catch (err: any) {
       setError(err.message || "اتصال به سرور برقرار نشد.");
+      setLoading(false);
+    }
+  };
+
+  // Forgot Password Step 1: Request OTP Code
+  const handleRequestOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetEmail || !resetEmail.trim()) {
+      setError("لطفاً آدرس ایمیل ثبت شده در حساب کاربری خود را وارد کنید.");
+      return;
+    }
+
+    setError("");
+    setOtpSuccessMessage("");
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/request-password-reset-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: resetEmail.trim() })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "ارسال کد تایید به ایمیل با خطا مواجه شد.");
+      }
+
+      setOtpSuccessMessage(data.message || "کد تایید ۶ رقمی به ایمیل شما ارسال شد.");
+      if (data.otpCode) {
+        setDevOtpCode(data.otpCode);
+      }
+      setForgotPasswordStep("enter_otp");
+      setLoading(false);
+    } catch (err: any) {
+      setError(err.message || "خطا در برقراری ارتباط با سرور.");
+      setLoading(false);
+    }
+  };
+
+  // Forgot Password Step 2: Verify OTP Code
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!otpCode || otpCode.trim().length !== 6) {
+      setError("لطفاً کد تایید ۶ رقمی را به صورت کامل وارد کنید.");
+      return;
+    }
+
+    setError("");
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/verify-password-reset-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: resetEmail.trim(), otpCode: otpCode.trim() })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "کد تایید وارد شده معتبر نیست.");
+      }
+
+      setResetToken(data.resetToken);
+      setOtpSuccessMessage("کد تایید تایید شد. اکنون رمز عبور جدید خود را وارد کنید.");
+      setForgotPasswordStep("reset_password");
+      setLoading(false);
+    } catch (err: any) {
+      setError(err.message || "خطا در تایید کد OTP.");
+      setLoading(false);
+    }
+  };
+
+  // Forgot Password Step 3: Set New Password
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPassword || newPassword.length < 4) {
+      setError("رمز عبور جدید باید حداقل ۴ کاراکتر داشته باشد.");
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      setError("رمز عبور جدید و تکرار آن یکسان نیستند.");
+      return;
+    }
+
+    setError("");
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/reset-password-with-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: resetEmail.trim(),
+          resetToken,
+          newPassword
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "تغییر رمز عبور با خطا مواجه شد.");
+      }
+
+      // Success!
+      if (data.username) setUsername(data.username);
+      setPassword(newPassword);
+      setForgotPasswordStep("none");
+      setIsLogin(true);
+      setOtpSuccessMessage("✅ رمز عبور شما با موفقیت به روز گردید. اکنون وارد حساب خود شوید.");
+      setError("");
+      setLoading(false);
+    } catch (err: any) {
+      setError(err.message || "تغییر رمز عبور ناموفق بود.");
       setLoading(false);
     }
   };
@@ -328,8 +460,212 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         </div>
 
         <AnimatePresence mode="wait">
-          {/* 1. E2EE Key Pair Explanation Screen after successful register */}
-          {registeredKeyPair && registrationResponse ? (
+          {/* OTP Forgot Password Recovery Screen */}
+          {forgotPasswordStep !== "none" ? (
+            <motion.div
+              key="forgot-password-screen"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              className="space-y-4 text-right"
+            >
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-xl">
+                    <Key className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">بازیابی رمز عبور با ایمیل</h3>
+                    <p className="text-[10px] text-slate-400">سیستم ارسال کد OTP پیام‌رسان پرهام</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setForgotPasswordStep("none");
+                    setError("");
+                    setOtpSuccessMessage("");
+                  }}
+                  className="text-xs text-slate-400 hover:text-white px-2.5 py-1 bg-slate-950 rounded-lg border border-slate-800 transition"
+                >
+                  بازگشت
+                </button>
+              </div>
+
+              {otpSuccessMessage && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-xl flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="leading-relaxed font-medium">{otpSuccessMessage}</p>
+                    {devOtpCode && (
+                      <p className="mt-1 text-[11px] font-mono text-amber-400 bg-amber-950/40 p-1.5 rounded border border-amber-800/40">
+                        🔑 کد تایید شما: <span className="font-bold tracking-widest text-white">{devOtpCode}</span>
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {error && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-xl flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {/* Step 1: Request Email */}
+              {forgotPasswordStep === "request_email" && (
+                <form onSubmit={handleRequestOtp} className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">آدرس ایمیل ثبت شده در حساب</label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500">
+                        <Mail className="w-4.5 h-4.5" />
+                      </span>
+                      <input
+                        type="email"
+                        dir="ltr"
+                        required
+                        placeholder="example@gmail.com"
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        className="w-full pr-10 pl-4 py-2.5 bg-slate-950 border border-slate-800 rounded-2xl text-slate-200 text-sm focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 font-mono"
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1.5 flex items-center gap-1">
+                      <HelpCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      کد تایید ۶ رقمی به این آدرس ایمیل ارسال خواهد شد.
+                    </p>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-3 bg-gradient-to-l from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-bold rounded-2xl shadow-lg shadow-amber-950/40 hover:shadow-amber-950/60 disabled:opacity-50 transition text-sm flex items-center justify-center gap-2"
+                  >
+                    {loading ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <span>ارسال کد تایید OTP به ایمیل</span>
+                        <ArrowRight className="w-4 h-4 rotate-180" />
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+
+              {/* Step 2: Enter OTP Code */}
+              {forgotPasswordStep === "enter_otp" && (
+                <form onSubmit={handleVerifyOtp} className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">کد تایید ۶ رقمی (OTP)</label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500">
+                        <Key className="w-4.5 h-4.5 text-amber-400" />
+                      </span>
+                      <input
+                        type="text"
+                        dir="ltr"
+                        maxLength={6}
+                        required
+                        placeholder="123456"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ""))}
+                        className="w-full pr-10 pl-4 py-3 bg-slate-950 border border-amber-500/40 rounded-2xl text-amber-400 font-mono font-bold text-center tracking-[8px] text-lg focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1.5 text-center">
+                      کد ارسال شده به <span className="text-slate-200 dir-ltr font-mono">{resetEmail}</span> را وارد نمایید.
+                    </p>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-3 bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-2xl shadow-lg shadow-emerald-950/40 hover:shadow-emerald-950/60 disabled:opacity-50 transition text-sm flex items-center justify-center gap-2"
+                  >
+                    {loading ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <span>اعتبارسنجی و تایید کد</span>
+                        <CheckCircle2 className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+
+                  <div className="text-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setForgotPasswordStep("request_email");
+                        setError("");
+                      }}
+                      className="text-xs text-amber-400 hover:underline"
+                    >
+                      ویرایش ایمیل یا ارسال مجدد کد
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* Step 3: Reset Password */}
+              {forgotPasswordStep === "reset_password" && (
+                <form onSubmit={handleResetPassword} className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">رمز عبور جدید</label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500">
+                        <Lock className="w-4.5 h-4.5" />
+                      </span>
+                      <input
+                        type="password"
+                        dir="ltr"
+                        required
+                        placeholder="••••••••"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className="w-full pr-10 pl-4 py-2.5 bg-slate-950 border border-slate-800 rounded-2xl text-slate-200 text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">تکرار رمز عبور جدید</label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500">
+                        <Lock className="w-4.5 h-4.5" />
+                      </span>
+                      <input
+                        type="password"
+                        dir="ltr"
+                        required
+                        placeholder="••••••••"
+                        value={confirmNewPassword}
+                        onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        className="w-full pr-10 pl-4 py-2.5 bg-slate-950 border border-slate-800 rounded-2xl text-slate-200 text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-3 bg-gradient-to-l from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold rounded-2xl shadow-lg shadow-blue-950/40 hover:shadow-blue-950/60 disabled:opacity-50 transition text-sm flex items-center justify-center gap-2"
+                  >
+                    {loading ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <span>تغییر و بروزرسانی رمز عبور</span>
+                        <CheckCircle2 className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+            </motion.div>
+          ) : registeredKeyPair && registrationResponse ? (
             <motion.div
               key="e2e-explain"
               initial={{ opacity: 0, scale: 0.95 }}
@@ -387,16 +723,23 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               exit={{ opacity: 0, y: -15 }}
               className="space-y-4 text-right"
             >
+              {otpSuccessMessage && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-xl flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{otpSuccessMessage}</span>
+                </div>
+              )}
+
               {/* Form Selection Tabs */}
               <div className="flex bg-slate-950 p-1 rounded-2xl border border-slate-800/80 mb-2">
                 <button
-                  onClick={() => { setIsLogin(true); setError(""); }}
+                  onClick={() => { setIsLogin(true); setError(""); setOtpSuccessMessage(""); }}
                   className={`w-1/2 py-2 text-xs font-bold rounded-xl transition ${isLogin ? "bg-slate-800 text-white shadow-sm" : "text-slate-400 hover:text-slate-300"}`}
                 >
                   ورود به حساب
                 </button>
                 <button
-                  onClick={() => { setIsLogin(false); setError(""); }}
+                  onClick={() => { setIsLogin(false); setError(""); setOtpSuccessMessage(""); }}
                   className={`w-1/2 py-2 text-xs font-bold rounded-xl transition ${!isLogin ? "bg-slate-800 text-white shadow-sm" : "text-slate-400 hover:text-slate-300"}`}
                 >
                   ثبت نام جدید
@@ -422,8 +765,52 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   </div>
                 </div>
 
+                {!isLogin && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 mb-1">
+                      آدرس ایمیل معتبر <span className="text-rose-400">*</span>
+                    </label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500">
+                        <Mail className="w-4.5 h-4.5 text-blue-400" />
+                      </span>
+                      <input
+                        type="email"
+                        dir="ltr"
+                        required
+                        placeholder="example@gmail.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full pr-10 pl-4 py-2.5 bg-slate-950 border border-slate-800 rounded-2xl text-slate-200 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-mono"
+                      />
+                    </div>
+                    <div className="mt-1.5 p-2 bg-blue-500/10 border border-blue-500/20 rounded-xl flex items-start gap-1.5">
+                      <HelpCircle className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />
+                      <p className="text-[10.5px] text-blue-300 leading-relaxed font-normal">
+                        وارد کردن ایمیل الزامی است و برای بازیابی حساب کاربری و دریافت کد تایید (OTP) در صورت فراموشی رمز عبور استفاده می‌شود.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 mb-1">رمز عبور امن</label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-xs font-bold text-slate-400">رمز عبور امن</label>
+                    {isLogin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setForgotPasswordStep("request_email");
+                          setResetEmail("");
+                          setError("");
+                          setOtpSuccessMessage("");
+                        }}
+                        className="text-[11px] font-bold text-amber-400 hover:underline hover:text-amber-300 transition"
+                      >
+                        رمز عبور را فراموش کرده‌اید؟
+                      </button>
+                    )}
+                  </div>
                   <div className="relative">
                     <span className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500">
                       <Lock className="w-4.5 h-4.5" />

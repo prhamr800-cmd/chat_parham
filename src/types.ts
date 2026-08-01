@@ -26,6 +26,10 @@ export interface User {
   isAppPasscodeEnabled?: boolean;
   bubbleBorderFrame?: 'default' | 'heart' | 'fiery' | 'bow' | 'emerald_glow' | 'cyber_neon';
   role?: string;
+  subscriptionTier?: 'free' | 'plus';
+  subscriptionPlan?: string;
+  subscriptionEndDate?: string;
+  grantedByAdmin?: boolean;
 }
 
 export interface Message {
@@ -53,6 +57,8 @@ export interface Message {
   forwardedFrom?: string;
   isPinned?: boolean;
   deletedFor?: string[];
+  senderSubscriptionTier?: string;
+  bubbleBorderFrame?: string;
 }
 
 export interface Chat {

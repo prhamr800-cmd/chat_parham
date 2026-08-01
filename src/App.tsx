@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { 
   Search, Settings, Send, Paperclip, Mic, Square, Play, Pause, Smile, 
   MoreVertical, ShieldCheck, Check, CheckCheck, Users, Radio, Download, 
-  FileText, Volume2, HelpCircle, AlertCircle, Sparkles, SmilePlus, Ban, Lock, Filter, RefreshCw,
+  FileText, Volume2, HelpCircle, AlertCircle, Sparkles, SmilePlus, Ban, Lock, Unlock, ChevronUp, Filter, RefreshCw,
   ArrowRight, BarChart2, X, Pin, Languages, Globe, CornerUpLeft, Image as ImageIcon, ShieldAlert, Crown,
   Phone, PhoneOff, Camera, CameraOff, MicOff, Video,
   Copy, Plus, Trash2, Menu, Maximize2, Minimize2, GripVertical, Code
@@ -299,12 +299,78 @@ export default function App() {
 
   // Voice recording states
   const [isRecording, setIsRecording] = useState(false);
+  const [isVoiceLocked, setIsVoiceLocked] = useState(false);
   const [recordDuration, setRecordDuration] = useState(0);
+  const [voiceSwipeUpDistance, setVoiceSwipeUpDistance] = useState(0);
+  const touchStartYRef = useRef<number | null>(null);
   const recordIntervalRef = useRef<any>(null);
   const recordDurationRef = useRef<number>(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const longPressTimeoutRef = useRef<{ [msgId: string]: any }>({});
+
+  const cancelVoiceRecording = () => {
+    if (recordIntervalRef.current) clearInterval(recordIntervalRef.current);
+    setIsRecording(false);
+    setIsVoiceLocked(false);
+    setVoiceSwipeUpDistance(0);
+    touchStartYRef.current = null;
+
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.onstop = null;
+      if (mediaRecorderRef.current.state !== "inactive") {
+        try {
+          mediaRecorderRef.current.stop();
+        } catch (e) {}
+      }
+    }
+  };
+
+  const handleVoiceTouchStart = (e: React.TouchEvent | React.MouseEvent) => {
+    const pageY = "touches" in e ? e.touches[0].pageY : e.pageY;
+    touchStartYRef.current = pageY;
+    setVoiceSwipeUpDistance(0);
+
+    if (!isRecording) {
+      startVoiceRecording();
+    }
+  };
+
+  const handleVoiceTouchMove = (e: React.TouchEvent | React.MouseEvent) => {
+    if (!isRecording || touchStartYRef.current === null) return;
+    const pageY = "touches" in e ? e.touches[0].pageY : e.pageY;
+    const deltaY = touchStartYRef.current - pageY;
+
+    if (deltaY > 0) {
+      setVoiceSwipeUpDistance(deltaY);
+      if (deltaY > 55 && !isVoiceLocked) {
+        setIsVoiceLocked(true);
+        if (navigator.vibrate) {
+          try { navigator.vibrate(50); } catch (err) {}
+        }
+      }
+    }
+  };
+
+  const handleVoiceTouchEnd = () => {
+    touchStartYRef.current = null;
+    setVoiceSwipeUpDistance(0);
+
+    if (isVoiceLocked) {
+      // Finger released after lock => hands-free recording continues!
+      return;
+    }
+
+    if (isRecording) {
+      if (recordDurationRef.current < 1) {
+        // Less than 1 sec tap => cancel
+        cancelVoiceRecording();
+      } else {
+        // Stop & send
+        stopVoiceRecording();
+      }
+    }
+  };
 
   const handleMessagePressStart = (msgId: string) => {
     if (longPressTimeoutRef.current[msgId]) {
@@ -2217,6 +2283,40 @@ export default function App() {
           });
         }
 
+        else if (type === "account_deleted") {
+          alert(payload?.message || "حساب کاربری شما توسط مدیریت سیستم به صورت کامل پاک گردید.");
+          setCurrentUser(null);
+          setPrivateKey("");
+          localStorage.removeItem("parham_user");
+          localStorage.removeItem("parham_private_key");
+          localStorage.removeItem("parham_session_id");
+        }
+
+        else if (type === "user_deleted_by_admin") {
+          const { userId, deletedChatIds } = payload;
+          setUsers(prev => {
+            const copy = { ...prev };
+            delete copy[userId];
+            return copy;
+          });
+          setMessages(prev => {
+            const newMsgs: { [chatId: string]: Message[] } = {};
+            Object.entries(prev).forEach(([cId, msgList]) => {
+              if (deletedChatIds && deletedChatIds.includes(cId)) {
+                return;
+              }
+              newMsgs[cId] = (msgList as Message[]).filter(m => m.senderId !== userId);
+            });
+            return newMsgs;
+          });
+          if (deletedChatIds && deletedChatIds.length > 0) {
+            setChats(prev => prev.filter(c => !deletedChatIds.includes(c.id)));
+            if (deletedChatIds.includes(activeChatId)) {
+              setActiveChatId("global-group");
+            }
+          }
+        }
+
         else if (type === "filtered_by_admin") {
           alert("حساب کاربری شما توسط مدیریت فیلتر (مسدود) شده است.");
           setCurrentUser(null);
@@ -2798,6 +2898,8 @@ export default function App() {
 
       mediaRecorder.start();
       setIsRecording(true);
+      setIsVoiceLocked(false);
+      setVoiceSwipeUpDistance(0);
       setRecordDuration(0);
       recordDurationRef.current = 0;
       recordIntervalRef.current = setInterval(() => {
@@ -2816,6 +2918,8 @@ export default function App() {
   const stopVoiceRecording = async () => {
     clearInterval(recordIntervalRef.current);
     setIsRecording(false);
+    setIsVoiceLocked(false);
+    setVoiceSwipeUpDistance(0);
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
@@ -3066,6 +3170,25 @@ export default function App() {
   });
 
   const activeChat = chats.find(c => c.id === activeChatId);
+
+  const isCurrentUserPlus = currentUser?.subscriptionTier === 'plus' || currentUser?.role === 'owner' || currentUser?.username?.toLowerCase() === 'parham';
+
+  const isPartnerUserPlus = useMemo(() => {
+    if (!activeChat) return false;
+    if (activeChat.type === 'direct') {
+      const partnerId = activeChat.members.find(m => m !== currentUser?.id);
+      if (!partnerId) return false;
+      const partner = users[partnerId];
+      return partner?.subscriptionTier === 'plus' || partner?.role === 'owner' || partner?.username?.toLowerCase() === 'parham';
+    } else if (activeChat.type === 'group') {
+      const otherMembers = activeChat.members.filter(m => m !== currentUser?.id);
+      return otherMembers.some(id => users[id]?.subscriptionTier === 'plus' || users[id]?.role === 'owner' || users[id]?.username?.toLowerCase() === 'parham');
+    }
+    return false;
+  }, [activeChat, currentUser?.id, users]);
+
+  const isDualPlusChat = isCurrentUserPlus && isPartnerUserPlus;
+
   const rawActiveChatMessages = activeChatId ? (messages[activeChatId] || []) : [];
   
   // Filter active chat messages based on delete status and dynamic in-chat query
@@ -3329,7 +3452,8 @@ export default function App() {
         <main className={`flex-1 flex flex-row h-full overflow-hidden ${activeTheme.chatWallpaper} relative ${activeChatId ? 'flex' : 'hidden sm:flex'}`}>
           
           {activeChat ? (
-            <div className="flex-1 flex flex-col h-full overflow-hidden">
+            <div className={`flex-1 flex flex-col h-full overflow-hidden transition-all duration-300 ${isDualPlusChat ? 'p-[3px] bg-gradient-to-r from-purple-500 via-pink-500 via-cyan-400 via-amber-400 to-purple-500 animate-neon-wave glow-neon-dual-plus rounded-2xl m-0.5 sm:m-1.5 shadow-2xl' : ''}`}>
+              <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-950/90 rounded-xl relative">
               {/* Active chat header */}
               <div className="h-14 shrink-0 border-b border-slate-800/80 bg-slate-900/40 backdrop-blur-md px-4 flex items-center justify-between relative z-10">
                 <div className="flex items-center gap-3">
@@ -3418,6 +3542,12 @@ export default function App() {
 
                 {/* Right controls */}
                 <div className="flex items-center gap-2">
+                  {isDualPlusChat && (
+                    <div className="px-2.5 py-1 rounded-full bg-gradient-to-r from-purple-600 via-pink-600 to-cyan-500 text-white text-[9px] font-black flex items-center gap-1.5 shadow-lg shadow-purple-950/80 animate-pulse shrink-0 border border-purple-400/30" title="گفتگوی دو کاربر پلاس: نوار نئونی چرخان فعال گردید">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-spin" />
+                      <span className="hidden md:inline">چت VIP (موج نئونی پلاس)</span>
+                    </div>
+                  )}
                   <button
                     onClick={() => {
                       if (currentUser?.subscriptionTier !== 'plus' && currentUser?.role !== 'owner') {
@@ -3641,61 +3771,68 @@ export default function App() {
                 {activeChatMessages.map((msg, idx) => {
                   const isOwn = msg.senderId === currentUser.id;
                   const msgSenderUser = isOwn ? currentUser : users[msg.senderId];
-                  const bubbleFrame = msgSenderUser?.bubbleBorderFrame || 'default';
+                  const bubbleFrame = msgSenderUser?.bubbleBorderFrame || msg.bubbleBorderFrame || 'default';
+                  const isPlusSender = msgSenderUser?.subscriptionTier === 'plus' || msg.senderSubscriptionTier === 'plus' || msgSenderUser?.role === 'owner' || msgSenderUser?.username?.toLowerCase() === 'parham';
 
                   const getFrameStyle = (frame: string) => {
                     switch (frame) {
                       case 'heart':
                         return {
-                          cls: 'border-pink-500/80 shadow-[0_0_12px_rgba(236,72,153,0.35)] ring-1 ring-pink-500/30',
+                          cls: 'border-2 border-pink-500/90 bg-gradient-to-br from-slate-950 via-slate-900 to-pink-950/40 text-pink-100 shadow-[0_0_24px_rgba(236,72,153,0.6)] ring-2 ring-pink-500/40',
                           decorations: (
                             <>
-                              <span className="absolute -top-1 -right-1 text-xs animate-bounce pointer-events-none select-none z-10">💖</span>
-                              <span className="absolute -bottom-0.5 -left-0.5 text-[9px] opacity-80 pointer-events-none select-none z-10">💕</span>
+                              <span className="absolute -top-2.5 -right-1 text-xs animate-bounce pointer-events-none select-none z-10 drop-shadow-[0_0_8px_rgba(236,72,153,0.9)]">💖</span>
+                              <span className="absolute -bottom-1 -left-1 text-[10px] opacity-90 pointer-events-none select-none z-10 drop-shadow-[0_0_6px_rgba(236,72,153,0.9)]">💕</span>
                             </>
                           )
                         };
                       case 'fiery':
                         return {
-                          cls: 'border-amber-500/80 shadow-[0_0_15px_rgba(245,158,11,0.4)] ring-1 ring-orange-500/40',
+                          cls: 'border-2 border-amber-500/90 bg-gradient-to-br from-slate-950 via-slate-900 to-amber-950/40 text-amber-100 shadow-[0_0_24px_rgba(245,158,11,0.65)] ring-2 ring-amber-500/40',
                           decorations: (
                             <>
-                              <span className="absolute -top-1 -right-1 text-xs animate-pulse pointer-events-none select-none z-10">🔥</span>
-                              <span className="absolute -bottom-0.5 -left-0.5 text-[9px] animate-pulse pointer-events-none select-none z-10">✨</span>
+                              <span className="absolute -top-2.5 -right-1 text-xs animate-pulse pointer-events-none select-none z-10 drop-shadow-[0_0_8px_rgba(245,158,11,0.9)]">🔥</span>
+                              <span className="absolute -bottom-1 -left-1 text-[10px] animate-pulse pointer-events-none select-none z-10 drop-shadow-[0_0_6px_rgba(245,158,11,0.9)]">✨</span>
                             </>
                           )
                         };
                       case 'bow':
                         return {
-                          cls: 'border-fuchsia-400/80 shadow-[0_0_12px_rgba(232,121,249,0.35)] ring-1 ring-purple-400/30',
+                          cls: 'border-2 border-fuchsia-400/90 bg-gradient-to-br from-slate-950 via-slate-900 to-fuchsia-950/40 text-fuchsia-100 shadow-[0_0_24px_rgba(232,121,249,0.6)] ring-2 ring-fuchsia-400/40',
                           decorations: (
                             <>
-                              <span className="absolute -top-1.5 -right-1 text-xs pointer-events-none select-none z-10">🎀</span>
-                              <span className="absolute -bottom-0.5 -left-0.5 text-[9px] pointer-events-none select-none z-10">🎀</span>
+                              <span className="absolute -top-2.5 -right-1 text-xs pointer-events-none select-none z-10 drop-shadow-[0_0_8px_rgba(232,121,249,0.9)]">🎀</span>
+                              <span className="absolute -bottom-1 -left-1 text-[10px] pointer-events-none select-none z-10 drop-shadow-[0_0_6px_rgba(232,121,249,0.9)]">🎀</span>
                             </>
                           )
                         };
                       case 'emerald_glow':
                         return {
-                          cls: 'border-emerald-400/80 shadow-[0_0_14px_rgba(16,185,129,0.4)] ring-1 ring-emerald-500/40',
+                          cls: 'border-2 border-emerald-400/90 bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950/40 text-emerald-100 shadow-[0_0_24px_rgba(16,185,129,0.65)] ring-2 ring-emerald-400/40',
                           decorations: (
                             <>
-                              <span className="absolute -top-1 -right-1 text-xs animate-pulse pointer-events-none select-none z-10">✨</span>
-                              <span className="absolute -bottom-0.5 -left-0.5 text-[9px] pointer-events-none select-none z-10">💎</span>
+                              <span className="absolute -top-2.5 -right-1 text-xs animate-pulse pointer-events-none select-none z-10 drop-shadow-[0_0_8px_rgba(16,185,129,0.9)]">✨</span>
+                              <span className="absolute -bottom-1 -left-1 text-[10px] pointer-events-none select-none z-10 drop-shadow-[0_0_6px_rgba(16,185,129,0.9)]">💎</span>
                             </>
                           )
                         };
                       case 'cyber_neon':
                         return {
-                          cls: 'border-cyan-400/80 shadow-[0_0_16px_rgba(6,182,212,0.45)] ring-1 ring-cyan-400/50',
+                          cls: 'border-2 border-cyan-400/90 bg-gradient-to-br from-slate-950 via-slate-900 to-cyan-950/40 text-cyan-100 shadow-[0_0_26px_rgba(6,182,212,0.7)] ring-2 ring-cyan-400/50',
                           decorations: (
                             <>
-                              <span className="absolute -top-1 -right-1 text-xs animate-pulse pointer-events-none select-none z-10">⚡</span>
-                              <span className="absolute -bottom-0.5 -left-0.5 text-[9px] pointer-events-none select-none z-10">🌐</span>
+                              <span className="absolute -top-2.5 -right-1 text-xs animate-pulse pointer-events-none select-none z-10 drop-shadow-[0_0_8px_rgba(6,182,212,0.9)]">⚡</span>
+                              <span className="absolute -bottom-1 -left-1 text-[10px] pointer-events-none select-none z-10 drop-shadow-[0_0_6px_rgba(6,182,212,0.9)]">🌐</span>
                             </>
                           )
                         };
                       default:
+                        if (isPlusSender) {
+                          return {
+                            cls: 'border border-amber-500/50 bg-gradient-to-br from-slate-950 via-slate-900 to-amber-950/30 text-amber-50 shadow-[0_0_16px_rgba(245,158,11,0.3)]',
+                            decorations: null
+                          };
+                        }
                         return { cls: '', decorations: null };
                     }
                   };
@@ -3705,9 +3842,9 @@ export default function App() {
                     <motion.div 
                       key={msg.id}
                       id={`msg-${msg.id}`}
-                      initial={{ opacity: 0, y: 3 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.08, ease: "easeOut" }}
+                      initial={{ opacity: 0, scale: 0.92, y: 12 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      transition={{ type: "spring", stiffness: 420, damping: 25 }}
                       className={`flex flex-col ${isOwn ? 'items-start' : 'items-end'} space-y-1 relative`}
                     >
                       {/* Sender Nickname */}
@@ -3717,7 +3854,15 @@ export default function App() {
                           className="flex items-center gap-1.5 mr-1 mb-0.5 cursor-pointer hover:opacity-80 transition group"
                           title="مشاهده پروفایل کاربری"
                         >
-                          <span className="text-[10px] text-slate-400 font-bold group-hover:text-indigo-400 group-hover:underline">{msg.senderNickname}</span>
+                          <span className="text-[10px] text-slate-400 font-bold group-hover:text-indigo-400 group-hover:underline flex items-center gap-1">
+                            <span>{msg.senderNickname}</span>
+                            {isPlusSender && (
+                              <span className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 font-black text-[9px] shadow-[0_0_8px_rgba(245,158,11,0.4)]" title="دارای اشتراک Messenger Plus ⭐">
+                                <Crown className="w-3 h-3 text-amber-400 fill-amber-400 inline" />
+                                <span>⭐</span>
+                              </span>
+                            )}
+                          </span>
                           {(() => {
                             const senderUser = users[msg.senderId];
                             if (!senderUser) return null;
@@ -4156,6 +4301,32 @@ export default function App() {
               {/* Chat Input Toolbar / Bar */}
               <div className="p-3 bg-slate-900/60 backdrop-blur-md border-t border-slate-800/80 shrink-0 relative z-10 space-y-2">
                 
+                {/* Floating Swipe-Up Gesture Indicator during recording */}
+                <AnimatePresence>
+                  {isRecording && !isVoiceLocked && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10, scale: 0.9 }}
+                      animate={{ opacity: 1, y: -Math.min(voiceSwipeUpDistance, 60), scale: 1 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="absolute -top-16 left-4 bg-slate-900/95 border border-indigo-500/60 p-2.5 px-4 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-3 z-30 select-none text-right dir-rtl"
+                    >
+                      <div className="flex flex-col items-center justify-center text-indigo-400 animate-bounce">
+                        <ChevronUp className="w-4 h-4" />
+                        <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      </div>
+                      <div>
+                        <div className="text-[11px] font-bold text-white flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                          <span>در حال ضبط ({recordDuration} ثانیه)</span>
+                        </div>
+                        <div className="text-[9px] text-slate-400 mt-0.5">
+                          انگشت را به بالا بکشید ⬆️ تا ضبط قفل شود
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
                 {/* AI Smart Suggestions */}
                 {smartSuggestions.length > 0 && (
                   <div className="flex gap-1.5 overflow-x-auto py-1 dir-rtl justify-start items-center select-none">
@@ -4216,101 +4387,143 @@ export default function App() {
                   </motion.div>
                 )}
 
-                <form onSubmit={handleSendMessage} className="flex items-center gap-3">
-                  
-                  {/* File attach button */}
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="p-2.5 bg-slate-950 border border-slate-800 text-slate-400 hover:text-white rounded-xl hover:bg-slate-900 shrink-0 transition shadow-sm"
-                    title="ارسال فایل حجیم"
-                  >
-                    <Paperclip className="w-5 h-5" />
-                  </button>
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
+                {/* Hands-Free Voice Recorder Bar if LOCKED */}
+                {isRecording && isVoiceLocked ? (
+                  <div className="flex items-center justify-between gap-3 bg-slate-950/90 border border-indigo-500/50 p-2.5 rounded-2xl shadow-xl animate-pulse">
+                    {/* Cancel button */}
+                    <button
+                      type="button"
+                      onClick={cancelVoiceRecording}
+                      className="p-2.5 bg-rose-600/20 hover:bg-rose-600/40 border border-rose-500/40 text-rose-300 rounded-xl transition flex items-center gap-1.5 text-xs font-bold shrink-0 cursor-pointer"
+                      title="لغو و حذف پیام صوتی"
+                    >
+                      <Trash2 className="w-4 h-4 text-rose-400" />
+                      <span className="hidden sm:inline">حذف</span>
+                    </button>
 
-                  {/* Text Input area */}
-                  <div className="flex-1 relative">
+                    {/* Equalizer & Timer */}
+                    <div className="flex items-center gap-3 min-w-0 flex-1 justify-center">
+                      <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-950/60 border border-rose-500/30 text-rose-300 text-xs font-mono font-bold">
+                        <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                        <span>{Math.floor(recordDuration / 60).toString().padStart(2, '0')}:{(recordDuration % 60).toString().padStart(2, '0')}</span>
+                      </div>
+
+                      <div className="flex items-center gap-1 h-5">
+                        <span className="w-1 bg-rose-500 rounded-full animate-bounce h-3" style={{ animationDelay: '0ms' }} />
+                        <span className="w-1 bg-indigo-500 rounded-full animate-bounce h-5" style={{ animationDelay: '150ms' }} />
+                        <span className="w-1 bg-emerald-500 rounded-full animate-bounce h-4" style={{ animationDelay: '300ms' }} />
+                        <span className="w-1 bg-amber-500 rounded-full animate-bounce h-6" style={{ animationDelay: '450ms' }} />
+                        <span className="w-1 bg-pink-500 rounded-full animate-bounce h-3" style={{ animationDelay: '600ms' }} />
+                      </div>
+
+                      <div className="hidden sm:flex items-center gap-1 text-[10px] text-indigo-300 bg-indigo-950/40 px-2.5 py-1 rounded-xl border border-indigo-500/30 font-bold">
+                        <Lock className="w-3.5 h-3.5 text-amber-400" />
+                        <span>ضبط قفل شد (بدون دست)</span>
+                      </div>
+                    </div>
+
+                    {/* Send button */}
+                    <button
+                      type="button"
+                      onClick={stopVoiceRecording}
+                      className="p-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition flex items-center gap-1.5 text-xs font-bold shrink-0 shadow-lg shadow-emerald-950/60 cursor-pointer"
+                      title="ارسال پیام صوتی"
+                    >
+                      <Send className="w-4 h-4 rotate-180" />
+                      <span>ارسال</span>
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleSendMessage} className="flex items-center gap-3">
+                    
+                    {/* File attach button */}
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="p-2.5 bg-slate-950 border border-slate-800 text-slate-400 hover:text-white rounded-xl hover:bg-slate-900 shrink-0 transition shadow-sm"
+                      title="ارسال فایل حجیم"
+                    >
+                      <Paperclip className="w-5 h-5" />
+                    </button>
                     <input
-                      type="text"
-                      placeholder="پیام خود را به صورت کاملا سرتاسری رمزنگاری شده بنویسید..."
-                      value={textInput}
-                      onChange={handleTextInputChange}
-                      className={`w-full pr-4 pl-12 py-3 bg-slate-950 border ${activeTheme.borderCol} rounded-2xl text-xs text-slate-100 focus:outline-none focus:ring-1 ${activeTheme.ringCol} transition`}
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleFileUpload}
+                      className="hidden"
                     />
 
-                    {/* Rich Emoji Picker Button */}
-                    <button
-                      type="button"
-                      onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                      className={`absolute inset-y-0 left-0 pl-3.5 flex items-center transition ${showEmojiPicker ? activeTheme.primaryText : 'text-slate-500 hover:text-slate-300'}`}
-                      title="انتخاب ایموجی"
-                    >
-                      <Smile className="w-4.5 h-4.5" />
-                    </button>
+                    {/* Text Input area */}
+                    <div className="flex-1 relative">
+                      <input
+                        type="text"
+                        placeholder="پیام خود را به صورت کاملا سرتاسری رمزنگاری شده بنویسید..."
+                        value={textInput}
+                        onChange={handleTextInputChange}
+                        className={`w-full pr-4 pl-12 py-3 bg-slate-950 border ${activeTheme.borderCol} rounded-2xl text-xs text-slate-100 focus:outline-none focus:ring-1 ${activeTheme.ringCol} transition`}
+                      />
 
-                    {/* Rich Emoji Picker Popup */}
-                    <AnimatePresence>
-                      {showEmojiPicker && (
-                        <div className="absolute bottom-14 left-0 z-50">
-                          <motion.div
-                            initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                            transition={{ duration: 0.15 }}
-                          >
-                            <EmojiPicker
-                              onSelect={(emoji) => {
-                                setTextInput(prev => prev + emoji);
-                              }}
-                              onClose={() => setShowEmojiPicker(false)}
-                            />
-                          </motion.div>
-                        </div>
-                      )}
-                    </AnimatePresence>
-                  </div>
+                      {/* Rich Emoji Picker Button */}
+                      <button
+                        type="button"
+                        onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                        className={`absolute inset-y-0 left-0 pl-3.5 flex items-center transition ${showEmojiPicker ? activeTheme.primaryText : 'text-slate-500 hover:text-slate-300'}`}
+                        title="انتخاب ایموجی"
+                      >
+                        <Smile className="w-4.5 h-4.5" />
+                      </button>
 
-                  {/* Send and Voice Triggers */}
-                  {textInput.trim() ? (
-                    <button
-                      type="submit"
-                      className={`p-3 ${activeTheme.primaryBg} ${activeTheme.primaryHoverBg} text-white rounded-2xl shrink-0 shadow-lg shadow-black/40 hover:scale-105 transition-all duration-150`}
-                    >
-                      <Send className="w-5 h-5 rotate-180" />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (isRecording) {
-                          stopVoiceRecording();
-                        } else {
-                          startVoiceRecording();
-                        }
-                      }}
-                      className={`p-3 rounded-2xl shrink-0 transition-all duration-150 ${isRecording ? 'bg-rose-600 animate-pulse text-white scale-110 ring-4 ring-rose-500/30' : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900'}`}
-                      title={isRecording ? "برای اتمام و ارسال کلیک کنید" : "کلیک کنید تا پیام صوتی ضبط شود"}
-                    >
-                      {isRecording ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                    </button>
-                  )}
+                      {/* Rich Emoji Picker Popup */}
+                      <AnimatePresence>
+                        {showEmojiPicker && (
+                          <div className="absolute bottom-14 left-0 z-50">
+                            <motion.div
+                              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                              animate={{ opacity: 1, scale: 1, y: 0 }}
+                              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                              transition={{ duration: 0.15 }}
+                            >
+                              <EmojiPicker
+                                onSelect={(emoji) => {
+                                  setTextInput(prev => prev + emoji);
+                                }}
+                                onClose={() => setShowEmojiPicker(false)}
+                              />
+                            </motion.div>
+                          </div>
+                        )}
+                      </AnimatePresence>
+                    </div>
 
-                </form>
+                    {/* Send and Voice Triggers */}
+                    {textInput.trim() ? (
+                      <button
+                        type="submit"
+                        className={`p-3 ${activeTheme.primaryBg} ${activeTheme.primaryHoverBg} text-white rounded-2xl shrink-0 shadow-lg shadow-black/40 hover:scale-105 transition-all duration-150`}
+                      >
+                        <Send className="w-5 h-5 rotate-180" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onMouseDown={handleVoiceTouchStart}
+                        onMouseMove={handleVoiceTouchMove}
+                        onMouseUp={handleVoiceTouchEnd}
+                        onTouchStart={handleVoiceTouchStart}
+                        onTouchMove={handleVoiceTouchMove}
+                        onTouchEnd={handleVoiceTouchEnd}
+                        className={`p-3 rounded-2xl shrink-0 transition-all duration-150 select-none touch-none cursor-pointer ${isRecording ? 'bg-rose-600 animate-pulse text-white scale-110 ring-4 ring-rose-500/30' : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900'}`}
+                        title={isRecording ? "برای ارسال رها کنید، یا به بالا بکشید تا قفل شود" : "نگه دارید تا پیام صوتی ضبط شود (کشیدن به بالا برای قفل)"}
+                      >
+                        {isRecording ? <Mic className="w-5 h-5 text-white animate-bounce" /> : <Mic className="w-5 h-5" />}
+                      </button>
+                    )}
 
-                {/* Micro record timer label helper */}
-                {isRecording && (
-                  <div className="text-center text-[10px] text-rose-400 font-bold mt-1.5 animate-pulse">
-                    🎤 در حال ضبط پیام صوتی: {recordDuration} ثانیه (برای اتمام ضبط و ارسال، مجدداً روی دکمه میکروفون کلیک کنید)
-                  </div>
+                  </form>
                 )}
+
               </div>
             </div>
+          </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4">
               <div className={`p-4 bg-slate-900/60 border border-slate-800/80 rounded-3xl ${isRedTheme ? 'text-red-400' : 'text-blue-400'} shadow-xl max-w-sm`}>

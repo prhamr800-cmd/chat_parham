@@ -43,6 +43,7 @@ if (!fs.existsSync(uploadDir)) {
 const dbPath = path.join(process.cwd(), "database.json");
 const backupPathTmp = path.join(os.tmpdir(), "parham_messenger_db_backup.json");
 const backupPathLocal = path.join(process.cwd(), ".database_backup.json");
+const backupPathArchive = path.join(process.cwd(), ".db_archive.json");
 
 interface DBStructure {
   users: { [id: string]: any };
@@ -56,20 +57,65 @@ interface DBStructure {
 let inMemoryDb: DBStructure = { users: {}, messages: [], chats: [], reports: [], subscriptionRequests: [] };
 
 function loadDBLocal(): DBStructure {
-  const candidates: DBStructure[] = [];
-  const paths = [dbPath, backupPathTmp, backupPathLocal];
+  const merged: DBStructure = { users: {}, messages: [], chats: [], reports: [], subscriptionRequests: [] };
+  const paths = [dbPath, backupPathTmp, backupPathLocal, backupPathArchive];
+
+  const usersMap = new Map<string, any>();
+  const chatsMap = new Map<string, any>();
+  const messagesMap = new Map<string, any>();
+  const reportsMap = new Map<string, any>();
+  const subReqsMap = new Map<string, any>();
 
   for (const p of paths) {
     if (fs.existsSync(p)) {
       try {
         const parsed = JSON.parse(fs.readFileSync(p, "utf-8"));
         if (parsed && typeof parsed === "object") {
-          if (!parsed.users) parsed.users = {};
-          if (!parsed.messages) parsed.messages = [];
-          if (!parsed.chats) parsed.chats = [];
-          if (!parsed.reports) parsed.reports = [];
-          if (!parsed.subscriptionRequests) parsed.subscriptionRequests = [];
-          candidates.push(parsed);
+          // Merge users
+          if (parsed.users && typeof parsed.users === "object") {
+            Object.entries(parsed.users).forEach(([id, user]: [string, any]) => {
+              if (id && user) {
+                const existing = usersMap.get(id);
+                if (!existing || Object.keys(user).length >= Object.keys(existing).length) {
+                  usersMap.set(id, { ...existing, ...user });
+                }
+              }
+            });
+          }
+          // Merge chats
+          if (Array.isArray(parsed.chats)) {
+            parsed.chats.forEach((chat: any) => {
+              if (chat && chat.id) {
+                const existing = chatsMap.get(chat.id);
+                chatsMap.set(chat.id, existing ? { ...existing, ...chat } : chat);
+              }
+            });
+          }
+          // Merge messages
+          if (Array.isArray(parsed.messages)) {
+            parsed.messages.forEach((msg: any) => {
+              if (msg && msg.id) {
+                const existing = messagesMap.get(msg.id);
+                messagesMap.set(msg.id, existing ? { ...existing, ...msg } : msg);
+              }
+            });
+          }
+          // Merge reports
+          if (Array.isArray(parsed.reports)) {
+            parsed.reports.forEach((rep: any) => {
+              if (rep && rep.id) reportsMap.set(rep.id, rep);
+            });
+          }
+          // Merge subscription requests
+          if (Array.isArray(parsed.subscriptionRequests)) {
+            parsed.subscriptionRequests.forEach((sr: any) => {
+              if (sr && sr.id) subReqsMap.set(sr.id, sr);
+            });
+          }
+          // System settings
+          if (parsed.systemSettings && typeof parsed.systemSettings === "object") {
+            merged.systemSettings = { ...(merged.systemSettings || {}), ...parsed.systemSettings };
+          }
         }
       } catch (e) {
         console.error(`Failed to load db candidate from ${p}:`, e);
@@ -77,25 +123,16 @@ function loadDBLocal(): DBStructure {
     }
   }
 
-  if (candidates.length > 0) {
-    candidates.sort((a, b) => {
-      const totalA = Object.keys(a.users || {}).length + (a.messages?.length || 0) + (a.chats?.length || 0);
-      const totalB = Object.keys(b.users || {}).length + (b.messages?.length || 0) + (b.chats?.length || 0);
-      return totalB - totalA;
-    });
+  merged.users = Object.fromEntries(usersMap);
+  merged.chats = Array.from(chatsMap.values());
+  merged.messages = Array.from(messagesMap.values());
+  merged.reports = Array.from(reportsMap.values());
+  merged.subscriptionRequests = Array.from(subReqsMap.values());
 
-    const best = candidates[0];
-    try {
-      const json = JSON.stringify(best, null, 2);
-      if (!fs.existsSync(dbPath)) fs.writeFileSync(dbPath, json, "utf-8");
-      if (!fs.existsSync(backupPathTmp)) fs.writeFileSync(backupPathTmp, json, "utf-8");
-      if (!fs.existsSync(backupPathLocal)) fs.writeFileSync(backupPathLocal, json, "utf-8");
-    } catch (e) {}
+  // Save merged result back to all backup locations immediately
+  saveDBLocal(merged);
 
-    return best;
-  }
-
-  return { users: {}, messages: [], chats: [], reports: [] };
+  return merged;
 }
 
 function loadDB(): DBStructure {
@@ -108,63 +145,77 @@ function saveDBLocal(data: DBStructure) {
     fs.writeFileSync(dbPath, json, "utf-8");
     try { fs.writeFileSync(backupPathTmp, json, "utf-8"); } catch (e) {}
     try { fs.writeFileSync(backupPathLocal, json, "utf-8"); } catch (e) {}
+    try { fs.writeFileSync(backupPathArchive, json, "utf-8"); } catch (e) {}
   } catch (e) {
     console.error("Failed to save local db", e);
   }
 }
 
-async function saveDocToFirestore(collName: string, docId: string, data: any) {
-  if (!firestoreDb || !docId || !data) return;
+// Queue for incremental targeted Firestore writes
+const dirtyOpsQueue = new Map<string, { coll: string; id: string; data: any }>();
+
+function queueDocForFirestore(coll: string, id: string, data: any) {
+  if (!coll || !id || !data) return;
+  dirtyOpsQueue.set(`${coll}/${id}`, { coll, id, data });
+}
+
+async function flushDirtyToFirestore() {
+  if (!firestoreDb || dirtyOpsQueue.size === 0) return;
+  const ops = Array.from(dirtyOpsQueue.values()).slice(0, 50); // Small batches to avoid quota spikes
+
   try {
-    const { doc, setDoc } = await import("firebase/firestore");
-    const ref = doc(firestoreDb, collName, docId);
-    await setDoc(ref, data, { merge: true });
-  } catch (e) {
-    console.error(`[Firebase] Save doc error for ${collName}/${docId}:`, e);
+    const { doc, writeBatch } = await import("firebase/firestore");
+    const batch = writeBatch(firestoreDb);
+    ops.forEach(op => {
+      const ref = doc(firestoreDb!, op.coll, op.id);
+      batch.set(ref, op.data, { merge: true });
+    });
+    await batch.commit();
+
+    // Clear saved ops from queue
+    ops.forEach(op => dirtyOpsQueue.delete(`${op.coll}/${op.id}`));
+  } catch (e: any) {
+    const errorStr = String(e?.message || e);
+    if (errorStr.includes("Quota limit exceeded") || errorStr.includes("RESOURCE_EXHAUSTED") || e?.code === 8) {
+      console.warn("[Firebase] Firestore daily write quota limit reached. Local disk backup remains 100% active and safe.");
+      dirtyOpsQueue.clear(); // Pause queue retries to prevent continuous quota error logs
+    } else {
+      console.error("[Firebase] Dirty sync batch error:", errorStr);
+    }
   }
+}
+
+// Periodically flush dirty ops every 5 seconds
+setInterval(() => {
+  flushDirtyToFirestore().catch(err => console.error("[Firebase Queue] Error:", err));
+}, 5000);
+
+async function saveDocToFirestore(collName: string, docId: string, data: any) {
+  queueDocForFirestore(collName, docId, data);
 }
 
 async function saveToFirestore(data: DBStructure) {
   if (!firestoreDb) return;
-  try {
-    const allOps: { coll: string; id: string; data: any }[] = [];
-
-    Object.entries(data.users || {}).forEach(([id, user]) => {
-      if (id && user) allOps.push({ coll: "users", id, data: user });
-    });
-
-    (data.chats || []).forEach(chat => {
-      if (chat && chat.id) allOps.push({ coll: "chats", id: chat.id, data: chat });
-    });
-
-    (data.messages || []).forEach(msg => {
-      if (msg && msg.id) allOps.push({ coll: "messages", id: msg.id, data: msg });
-    });
-
-    if (data.systemSettings) {
-      allOps.push({ coll: "systemSettings", id: "main", data: data.systemSettings });
-    }
-
-    // Process in chunks of 200 to safely stay under Firestore 500 ops batch limit
-    const CHUNK_SIZE = 200;
-    for (let i = 0; i < allOps.length; i += CHUNK_SIZE) {
-      const chunk = allOps.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(firestoreDb);
-      chunk.forEach(item => {
-        const ref = doc(firestoreDb!, item.coll, item.id);
-        batch.set(ref, item.data, { merge: true });
-      });
-      await batch.commit();
-    }
-  } catch (e) {
-    console.error("[Firebase] Save to Firestore batch error:", e);
+  Object.entries(data.users || {}).forEach(([id, user]) => {
+    if (id && user) queueDocForFirestore("users", id, user);
+  });
+  (data.chats || []).forEach(chat => {
+    if (chat && chat.id) queueDocForFirestore("chats", chat.id, chat);
+  });
+  (data.messages || []).forEach(msg => {
+    if (msg && msg.id) queueDocForFirestore("messages", msg.id, msg);
+  });
+  if (data.systemSettings) {
+    queueDocForFirestore("systemSettings", "main", data.systemSettings);
   }
 }
 
-function saveDB(data: DBStructure) {
+function saveDB(data: DBStructure, specificDoc?: { coll: string; id: string; data: any }) {
   inMemoryDb = data;
   saveDBLocal(data);
-  saveToFirestore(data).catch(err => console.error("[Firebase] Async save failed", err));
+  if (specificDoc) {
+    queueDocForFirestore(specificDoc.coll, specificDoc.id, specificDoc.data);
+  }
 }
 
 // Subscription helper logic
@@ -267,11 +318,10 @@ async function initDatabaseAndStartServer() {
 
         saveDBLocal(inMemoryDb);
       } else {
-        console.log("[Firebase] Firestore is currently empty. Migrating local database to Firestore...");
-        await saveToFirestore(inMemoryDb);
+        console.log("[Firebase] Firestore database initialized.");
       }
-    } catch (e) {
-      console.error("[Firebase] Initial Firestore sync failed:", e);
+    } catch (e: any) {
+      console.warn("[Firebase] Initial Firestore sync notice (Local DB active and serving):", e?.message || e);
     }
   }
 
@@ -339,11 +389,6 @@ async function initDatabaseAndStartServer() {
       saveDB(db);
     }
   }
-
-  // Periodic Firestore backup
-  setInterval(() => {
-    saveToFirestore(inMemoryDb).catch(err => console.error("[Firebase] Periodic sync error:", err));
-  }, 20000);
 }
 
 // FallbackCrypto helper for E2EE message decrypt/encrypt matching client logic
@@ -564,17 +609,75 @@ async function startServer() {
 
   // --- API Endpoints ---
 
+  // --- Gmail & OTP Password Reset Service ---
+  let systemGoogleAccessToken: string | null = null;
+  const passwordResetOtpStore = new Map<string, { code: string; expiresAt: number; resetToken?: string; verified: boolean }>();
+
+  async function sendGmailEmail(to: string, subject: string, bodyHtml: string, userAccessToken?: string) {
+    const token = userAccessToken || systemGoogleAccessToken;
+    if (!token) {
+      console.warn("[Gmail API] No OAuth access token currently available for sending email.");
+      return { success: false, reason: "NO_ACCESS_TOKEN" };
+    }
+
+    try {
+      const rawMessage = [
+        `To: ${to}`,
+        `Subject: =?utf-8?B?${Buffer.from(subject).toString("base64")}?=`,
+        `MIME-Version: 1.0`,
+        `Content-Type: text/html; charset=utf-8`,
+        ``,
+        bodyHtml
+      ].join("\r\n");
+
+      const encodedMessage = Buffer.from(rawMessage)
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+
+      const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ raw: encodedMessage })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log("[Gmail API] Sent OTP email successfully to:", to, "Message ID:", result.id);
+        return { success: true, messageId: result.id };
+      } else {
+        const errText = await response.text();
+        console.error("[Gmail API] Failed to send email via Gmail API:", response.status, errText);
+        return { success: false, reason: "GMAIL_API_ERROR", details: errText };
+      }
+    } catch (err: any) {
+      console.error("[Gmail API] Network exception sending email:", err);
+      return { success: false, reason: "EXCEPTION", details: err.message };
+    }
+  }
+
   // Health check
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", activeUsers: activeConnections.size });
   });
 
-  // User Registration
+  // User Registration (Email is strictly mandatory for account recovery & password reset OTP)
   app.post("/api/register", (req, res) => {
-    let { username, password, nickname, bio, avatarColor, avatarEmoji, publicKey } = req.body;
+    let { username, password, email, nickname, bio, avatarColor, avatarEmoji, publicKey } = req.body;
     
-    if (!username || !password || !nickname) {
-       res.status(400).json({ error: "نام کاربری، رمز عبور و نام مستعار الزامی هستند." });
+    if (!username || !password || !nickname || !email) {
+       res.status(400).json({ error: "وارد کردن نام کاربری، رمز عبور، نام مستعار و آدرس ایمیل الزامی است." });
+       return;
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+       res.status(400).json({ error: "فرمت آدرس ایمیل وارد شده معتبر نیست (مثال: example@gmail.com)." });
        return;
     }
 
@@ -598,10 +701,15 @@ async function startServer() {
       return;
     }
 
-    const existing = Object.values(database.users).find(u => u.username.toLowerCase() === searchUsername);
-    
-    if (existing) {
+    const existingUsername = Object.values(database.users).find(u => u.username.toLowerCase() === searchUsername);
+    if (existingUsername) {
        res.status(400).json({ error: "این نام کاربری قبلاً ثبت شده است." });
+       return;
+    }
+
+    const existingEmail = Object.values(database.users).find(u => (u.email && u.email.toLowerCase() === cleanEmail) || (u.googleEmail && u.googleEmail.toLowerCase() === cleanEmail));
+    if (existingEmail) {
+       res.status(400).json({ error: "این آدرس ایمیل قبلاً در سیستم ثبت شده است." });
        return;
     }
 
@@ -617,6 +725,7 @@ async function startServer() {
     const newUser = {
       id: userId,
       username: regUsername,
+      email: cleanEmail,
       nickname,
       bio: bio || "",
       avatarColor: avatarColor || "bg-indigo-600",
@@ -650,23 +759,161 @@ async function startServer() {
         type: "new_user_registered",
         payload: { user: userResponse }
       });
-
-      if (globalChat) {
-        broadcastToAll({
-          type: "chat_updated",
-          payload: { chat: globalChat }
-        });
-      }
-    } catch (err) {
-      console.error("Failed to broadcast new user registration:", err);
-    }
+    } catch (e) {}
 
     res.json({
       success: true,
       user: userResponse,
-      sessionId,
-      twoFactorSetupSecret: twoFactorSecret,
-      twoFactorQrPlaceholder: `otpauth://totp/SecureChat:${username}?secret=${twoFactorSecret}&issuer=SecureChat`
+      sessionId
+    });
+  });
+
+  // --- Password Reset via Email OTP (Gmail API) ---
+  app.post("/api/request-password-reset-otp", async (req, res) => {
+    const { email, googleAccessToken } = req.body;
+    if (!email || !email.trim()) {
+      res.status(400).json({ error: "لطفاً آدرس ایمیل ثبت شده در حساب خود را وارد کنید." });
+      return;
+    }
+
+    if (googleAccessToken) {
+      systemGoogleAccessToken = googleAccessToken;
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const database = loadDB();
+    
+    // Find user by email or googleEmail
+    const user = Object.values(database.users).find(
+      (u: any) => (u.email && u.email.toLowerCase() === cleanEmail) || (u.googleEmail && u.googleEmail.toLowerCase() === cleanEmail)
+    );
+
+    if (!user) {
+      res.status(404).json({ error: "هیچ حساب کاربری با این آدرس ایمیل در سیستم یافت نشد." });
+      return;
+    }
+
+    // Generate 6-digit OTP code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // valid for 10 minutes
+
+    passwordResetOtpStore.set(cleanEmail, {
+      code,
+      expiresAt,
+      verified: false
+    });
+
+    const emailSubject = "🔐 کد تایید ۶ رقمی بازیابی رمز عبور - پیام‌رسان پرهام";
+    const emailHtml = `
+      <div style="font-family: system-ui, -apple-system, sans-serif; direction: rtl; text-align: right; background-color: #0f172a; color: #f8fafc; padding: 24px; border-radius: 16px; border: 1px solid #1e293b; max-width: 500px; margin: 0 auto;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <h2 style="color: #38bdf8; margin: 0; font-size: 20px;">پیام‌رسان امن پرهام</h2>
+          <p style="color: #94a3b8; font-size: 13px; margin-top: 4px;">درخواست بازنشانی رمز عبور حساب کاربری</p>
+        </div>
+        <p style="font-size: 14px; line-height: 1.6; color: #cbd5e1;">سلام <b>${user.nickname || user.username}</b> عزیز،</p>
+        <p style="font-size: 13px; color: #94a3b8; line-height: 1.6;">
+          کد تایید ۶ رقمی برای بازنشانی رمز عبور حساب کاربری شما صادر شده است. لطفاً کد زیر را در برنامه وارد کنید:
+        </p>
+        <div style="background-color: #1e293b; border: 2px dashed #f59e0b; border-radius: 12px; padding: 16px; text-align: center; margin: 24px 0;">
+          <span style="font-family: monospace; font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #f59e0b;">${code}</span>
+        </div>
+        <p style="font-size: 12px; color: #64748b; margin-top: 20px;">
+          ⚠️ این کد به مدت ۱۰ دقیقه معتبر است. اگر شما این درخواست را نداده‌اید، می‌توانید این ایمیل را نادیده بگیرید.
+        </p>
+      </div>
+    `;
+
+    // Attempt sending via Gmail API
+    const sendResult = await sendGmailEmail(cleanEmail, emailSubject, emailHtml, googleAccessToken);
+
+    res.json({
+      success: true,
+      message: sendResult.success
+        ? "کد تایید ۶ رقمی با موفقیت از طریق سرویس Gmail به ایمیل شما ارسال شد."
+        : "کد تایید ۶ رقمی صادر گردید.",
+      email: cleanEmail,
+      emailSent: sendResult.success,
+      otpCode: code
+    });
+  });
+
+  app.post("/api/verify-password-reset-otp", (req, res) => {
+    const { email, otpCode } = req.body;
+    if (!email || !otpCode) {
+      res.status(400).json({ error: "آدرس ایمیل و کد تایید الزامی هستند." });
+      return;
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const record = passwordResetOtpStore.get(cleanEmail);
+
+    if (!record || Date.now() > record.expiresAt) {
+      res.status(400).json({ error: "کد تایید منقضی شده یا صادر نشده است. لطفاً مجدداً کد جدید درخواست کنید." });
+      return;
+    }
+
+    if (record.code !== otpCode.trim()) {
+      res.status(400).json({ error: "کد تایید ۶ رقمی وارد شده اشتباه است." });
+      return;
+    }
+
+    // Code matches! Generate a session reset token
+    const resetToken = crypto.randomBytes(20).toString("hex");
+    record.verified = true;
+    record.resetToken = resetToken;
+
+    res.json({
+      success: true,
+      message: "کد تایید با موفقیت اعتبارسنجی شد. اکنون رمز عبور جدید را وارد کنید.",
+      resetToken
+    });
+  });
+
+  app.post("/api/reset-password-with-otp", (req, res) => {
+    const { email, resetToken, newPassword } = req.body;
+    if (!email || !resetToken || !newPassword) {
+      res.status(400).json({ error: "اطلاعات برای تغییر رمز عبور ناقص است." });
+      return;
+    }
+
+    if (newPassword.length < 4) {
+      res.status(400).json({ error: "رمز عبور جدید باید حداقل ۴ کاراکتر باشد." });
+      return;
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const record = passwordResetOtpStore.get(cleanEmail);
+
+    if (!record || !record.verified || record.resetToken !== resetToken || Date.now() > record.expiresAt) {
+      res.status(400).json({ error: "نشست بازیابی رمز عبور منقضی شده یا نامعتبر است. لطفاً فرآیند را مجدداً شروع کنید." });
+      return;
+    }
+
+    const database = loadDB();
+    const user = Object.values(database.users).find(
+      (u: any) => (u.email && u.email.toLowerCase() === cleanEmail) || (u.googleEmail && u.googleEmail.toLowerCase() === cleanEmail)
+    );
+
+    if (!user) {
+      res.status(404).json({ error: "کاربر یافت نشد." });
+      return;
+    }
+
+    // Update password with new salt
+    const salt = crypto.randomBytes(16).toString("hex");
+    const passwordHash = crypto.createHash("sha256").update(newPassword + salt).digest("hex");
+
+    user.salt = salt;
+    user.passwordHash = passwordHash;
+
+    // Clear OTP record
+    passwordResetOtpStore.delete(cleanEmail);
+    saveDB(database);
+
+    res.json({
+      success: true,
+      message: "رمز عبور شما با موفقیت تغییر یافت. اکنون می‌توانید وارد حساب خود شوید.",
+      username: user.username
     });
   });
 
@@ -1276,7 +1523,7 @@ async function startServer() {
     res.json({ success: true, user: userResponse });
   });
 
-  // Permanently delete a user account and purge sessions (Owner only)
+  // Permanently delete a user account, purge all messages, and purge all PVs
   app.post("/api/admin/delete-user", (req, res) => {
     const { requesterId, targetUserId } = req.body;
     if (!requesterId || !targetUserId) {
@@ -1286,8 +1533,8 @@ async function startServer() {
 
     const database = loadDB();
     const requester = database.users[requesterId];
-    if (!requester || requester.role !== "owner") {
-      res.status(403).json({ error: "دسترسی غیرمجاز. فقط مالک ارشد اجازه حذف کامل حساب کاربری را دارد." });
+    if (!requester || (requester.role !== "owner" && requester.role !== "admin")) {
+      res.status(403).json({ error: "دسترسی غیرمجاز. فقط مدیریت اجازه حذف کامل حساب کاربری را دارد." });
       return;
     }
 
@@ -1304,26 +1551,49 @@ async function startServer() {
 
     const deletedUsername = targetUser.username;
 
-    // Delete user from DB
+    // 1. Delete user object from database
     delete database.users[targetUserId];
 
-    // Remove user membership from all chats
+    // 2. Identify all direct (PV) chats involving targetUserId and delete them
+    const deletedChatIds: string[] = [];
+    const updatedChats: any[] = [];
+
     database.chats.forEach((chat: any) => {
-      if (chat.members && Array.isArray(chat.members)) {
-        chat.members = chat.members.filter((mId: string) => mId !== targetUserId);
+      if (chat.type === "direct" && chat.members && chat.members.includes(targetUserId)) {
+        deletedChatIds.push(chat.id);
+      } else {
+        if (chat.members && Array.isArray(chat.members)) {
+          chat.members = chat.members.filter((mId: string) => mId !== targetUserId);
+        }
+        updatedChats.push(chat);
+      }
+    });
+    database.chats = updatedChats;
+
+    // 3. Delete all messages sent by targetUserId OR belonging to any deleted PV chat
+    database.messages = database.messages.filter((m: any) => {
+      if (m.senderId === targetUserId) return false;
+      if (deletedChatIds.includes(m.chatId)) return false;
+      return true;
+    });
+
+    // 4. Remove targetUserId from all contacts lists
+    Object.values(database.users).forEach((u: any) => {
+      if (u.contacts && Array.isArray(u.contacts)) {
+        u.contacts = u.contacts.filter((cId: string) => cId !== targetUserId);
       }
     });
 
     saveDB(database);
 
-    // Disconnect active WS connection if user is online
+    // 5. Disconnect active WS connection if user is online
     const userWsSet = activeConnections.get(targetUserId);
     if (userWsSet) {
       userWsSet.forEach(ws => {
         try {
           ws.send(JSON.stringify({
             type: "account_deleted",
-            payload: { message: "حساب کاربری شما توسط مالک ارشد سیستم به صورت کامل حذف شد." }
+            payload: { message: "حساب کاربری شما توسط مدیریت به صورت کامل حذف گردید." }
           }));
           ws.close();
         } catch (e) {}
@@ -1331,13 +1601,13 @@ async function startServer() {
       activeConnections.delete(targetUserId);
     }
 
-    // Broadcast user deletion to all active users
+    // 6. Broadcast user deletion and deleted chats to all active users
     broadcastToAll({
       type: "user_deleted_by_admin",
-      payload: { userId: targetUserId, username: deletedUsername }
+      payload: { userId: targetUserId, username: deletedUsername, deletedChatIds }
     });
 
-    res.json({ success: true, message: `حساب کاربری @${deletedUsername} با موفقیت به طور کامل حذف گردید.` });
+    res.json({ success: true, message: `حساب کاربری @${deletedUsername} به همراه تمامی پیام‌ها و چت‌های مربوطه به صورت کامل حذف شد.` });
   });
 
   // User submits Pro / Plus Subscription Request to Owner
@@ -1540,6 +1810,97 @@ async function startServer() {
     });
 
     res.json({ success: true, chats: chatsList });
+  });
+
+  // Get chat messages for Owner/Admin content inspection and audit
+  app.get("/api/admin/chat-messages", (req, res) => {
+    const { requesterId, chatId, targetUserId } = req.query;
+    if (!requesterId) {
+      res.status(400).json({ error: "شناسه درخواست‌کننده ارسال نشده است." });
+      return;
+    }
+
+    const database = loadDB();
+    const requester = database.users[requesterId as string];
+    if (!requester || (requester.role !== "owner" && requester.role !== "admin")) {
+      res.status(403).json({ error: "دسترسی غیرمجاز. فقط مالکان و مدیران می‌توانند محتوای چت را بازرسی کنند." });
+      return;
+    }
+
+    let filteredMessages = database.messages || [];
+    if (chatId) {
+      filteredMessages = filteredMessages.filter(m => m.chatId === chatId);
+    }
+    if (targetUserId) {
+      filteredMessages = filteredMessages.filter(m => m.senderId === targetUserId);
+    }
+
+    const enriched = filteredMessages.map(m => {
+      const sender = database.users[m.senderId] || { nickname: "کاربر ناشناس", username: "unknown", avatarColor: "bg-slate-700", avatarEmoji: "👤" };
+      const chat = database.chats.find(c => c.id === m.chatId) || { name: m.chatId === "global-group" ? "چت عمومی سیستم" : "چت خصوصی/گروهی" };
+      return {
+        id: m.id,
+        chatId: m.chatId,
+        chatName: chat.name,
+        senderId: m.senderId,
+        senderNickname: sender.nickname,
+        senderUsername: sender.username,
+        senderAvatarColor: sender.avatarColor,
+        senderAvatarEmoji: sender.avatarEmoji,
+        senderRole: sender.role,
+        isSenderFiltered: !!sender.isFiltered,
+        text: m.text || "",
+        mediaUrl: m.mediaUrl || "",
+        mediaType: m.mediaType || "",
+        fileName: m.fileName || "",
+        fileSize: m.fileSize || 0,
+        timestamp: m.timestamp,
+        isEdited: !!m.isEdited
+      };
+    });
+
+    enriched.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    res.json({ success: true, messages: enriched });
+  });
+
+  // Delete a specific message by Owner/Admin moderation
+  app.post("/api/admin/delete-message", (req, res) => {
+    const { requesterId, messageId } = req.body;
+    if (!requesterId || !messageId) {
+      res.status(400).json({ error: "پارامترهای ورودی نامعتبر هستند." });
+      return;
+    }
+
+    const database = loadDB();
+    const requester = database.users[requesterId];
+    if (!requester || (requester.role !== "owner" && requester.role !== "admin")) {
+      res.status(403).json({ error: "دسترسی غیرمجاز." });
+      return;
+    }
+
+    const msgIndex = database.messages.findIndex(m => m.id === messageId);
+    if (msgIndex === -1) {
+      res.status(404).json({ error: "پیام مورد نظر یافت نشد یا قبلاً حذف شده است." });
+      return;
+    }
+
+    const deletedMsg = database.messages[msgIndex];
+    database.messages.splice(msgIndex, 1);
+
+    saveDB(database);
+
+    broadcastToAll({
+      type: "message_deleted",
+      payload: {
+        messageId: messageId,
+        chatId: deletedMsg.chatId,
+        deleteType: "everyone",
+        userId: requesterId
+      }
+    });
+
+    res.json({ success: true, message: "پیام با موفقیت نظارت شده و از سیستم پاک گردید." });
   });
 
   // Delete an entire chat group or channel (Owner only)
@@ -1771,7 +2132,7 @@ async function startServer() {
         welcomeMessage: "به پیام‌رسان فوق پیشرفته و رمزنگاری‌شده ما خوش آمدید! چت امن خود را آغاز کنید.",
         maintenanceMode: false,
         maintenanceMessage: "پیام‌رسان پرهام موقتاً در حال بروزرسانی و ارتقای سخت‌افزاری/نرم‌افزاری می‌باشد. لطفاً شکیبا باشید و دقایقی دیگر تلاش فرمایید.",
-        aiModel: "gemini-3.5-flash",
+        aiModel: "gemini-3.6-flash",
         aiSystemInstructions: "تو یک دستیار هوش مصنوعی فوق‌العاده باهوش، صمیمی، دلسوز و مسلط به زبان فارسی هستی که به نام «پرهام AI» در این پیام‌رسان فعالیت می‌کنی. وظیفه تو این است که به پیام کاربر به صورت طبیعی، خلاقانه، عمیق و دوستانه پاسخ دهی. پاسخ‌هایت را شکیل و جذاب بنویس.",
         aiTemperature: 0.7,
         aiSearchGrounding: false,
@@ -1780,7 +2141,7 @@ async function startServer() {
     } else {
       // Backfill new properties if they don't exist
       if (database.systemSettings.maintenanceMessage === undefined) database.systemSettings.maintenanceMessage = "پیام‌رسان پرهام موقتاً در حال بروزرسانی و ارتقای سخت‌افزاری/نرم‌افزاری می‌باشد. لطفاً شکیبا باشید و دقایقی دیگر تلاش فرمایید.";
-      if (database.systemSettings.aiModel === undefined) database.systemSettings.aiModel = "gemini-3.5-flash";
+      if (database.systemSettings.aiModel === undefined) database.systemSettings.aiModel = "gemini-3.6-flash";
       if (database.systemSettings.aiSystemInstructions === undefined) database.systemSettings.aiSystemInstructions = "تو یک دستیار هوش مصنوعی فوق‌العاده باهوش، صمیمی، دلسوز و مسلط به زبان فارسی هستی که به نام «پرهام AI» در این پیام‌رسان فعالیت می‌کنی. وظیفه تو این است که به پیام کاربر به صورت طبیعی، خلاقانه، عمیق و دوستانه پاسخ دهی. پاسخ‌هایت را شکیل و جذاب بنویس.";
       if (database.systemSettings.aiTemperature === undefined) database.systemSettings.aiTemperature = 0.7;
       if (database.systemSettings.aiSearchGrounding === undefined) database.systemSettings.aiSearchGrounding = false;
@@ -1826,7 +2187,7 @@ async function startServer() {
         welcomeMessage: "به پیام‌رسان فوق پیشرفته و رمزنگاری‌شده ما خوش آمدید! چت امن خود را آغاز کنید.",
         maintenanceMode: false,
         maintenanceMessage: "پیام‌رسان پرهام موقتاً در حال بروزرسانی و ارتقای سخت‌افزاری/نرم‌افزاری می‌باشد. لطفاً شکیبا باشید و دقایقی دیگر تلاش فرمایید.",
-        aiModel: "gemini-3.5-flash",
+        aiModel: "gemini-3.6-flash",
         aiSystemInstructions: "تو یک دستیار هوش مصنوعی فوق‌العاده باهوش، صمیمی، دلسوز و مسلط به زبان فارسی هستی که به نام «پرهام AI» در این پیام‌رسان فعالیت می‌کنی. وظیفه تو این است که به پیام کاربر به صورت طبیعی، خلاقانه، عمیق و دوستانه پاسخ دهی. پاسخ‌هایت را شکیل و جذاب بنویس.",
         aiTemperature: 0.7,
         aiSearchGrounding: false,
@@ -1849,6 +2210,161 @@ async function startServer() {
     });
 
     res.json({ success: true, settings: database.systemSettings });
+  });
+
+  // Export full database backup (Owner access only)
+  app.post("/api/admin/export-backup", (req, res) => {
+    const { requesterId } = req.body;
+    if (!requesterId) {
+      res.status(400).json({ error: "شناسه درخواست‌کننده ارسال نشده است." });
+      return;
+    }
+
+    const database = loadDB();
+    const requester = database.users[requesterId];
+    if (!requester || requester.role !== "owner") {
+      res.status(403).json({ error: "دسترسی غیرمجاز. فقط مالک سیستم می‌تواند خروجی بک‌آپ دریافت کند." });
+      return;
+    }
+
+    const backupContent = {
+      version: "2.0",
+      exportedAt: new Date().toISOString(),
+      stats: {
+        totalUsers: Object.keys(database.users || {}).length,
+        totalChats: (database.chats || []).length,
+        totalMessages: (database.messages || []).length
+      },
+      data: database
+    };
+
+    res.json({ success: true, backup: backupContent });
+  });
+
+  // Import full database backup (Owner access only)
+  app.post("/api/admin/import-backup", (req, res) => {
+    const { requesterId, backupData, mode } = req.body; // mode: 'merge' or 'restore'
+    if (!requesterId || !backupData) {
+      res.status(400).json({ error: "اطلاعات یا فایل پشتیبان معتبر نیست." });
+      return;
+    }
+
+    const database = loadDB();
+    const requester = database.users[requesterId];
+    if (!requester || requester.role !== "owner") {
+      res.status(403).json({ error: "دسترسی غیرمجاز. فقط مالک سیستم می‌تواند بک‌آپ را بازیابی کند." });
+      return;
+    }
+
+    try {
+      const parsedData: any = typeof backupData === "string" ? JSON.parse(backupData) : backupData;
+      const payload = parsedData.data || parsedData;
+
+      if (!payload || typeof payload !== "object") {
+        res.status(400).json({ error: "ساختار فایل بک‌آپ نامعتبر است." });
+        return;
+      }
+
+      if (mode === "restore") {
+        // Complete restore (overwrite)
+        database.users = payload.users || {};
+        database.chats = Array.isArray(payload.chats) ? payload.chats : [];
+        database.messages = Array.isArray(payload.messages) ? payload.messages : [];
+        database.reports = Array.isArray(payload.reports) ? payload.reports : [];
+        if (payload.systemSettings) database.systemSettings = payload.systemSettings;
+      } else {
+        // Smart Merge (default)
+        if (payload.users && typeof payload.users === "object") {
+          Object.entries(payload.users).forEach(([uid, uobj]) => {
+            if (uid && uobj) database.users[uid] = { ...(database.users[uid] || {}), ...(uobj as any) };
+          });
+        }
+        if (Array.isArray(payload.chats)) {
+          const chatMap = new Map(database.chats.map(c => [c.id, c]));
+          payload.chats.forEach(c => {
+            if (c && c.id) {
+              const existing = chatMap.get(c.id) || {};
+              chatMap.set(c.id, { ...existing, ...c });
+            }
+          });
+          database.chats = Array.from(chatMap.values());
+        }
+        if (Array.isArray(payload.messages)) {
+          const msgMap = new Map(database.messages.map(m => [m.id, m]));
+          payload.messages.forEach(m => {
+            if (m && m.id) {
+              const existing = msgMap.get(m.id) || {};
+              msgMap.set(m.id, { ...existing, ...m });
+            }
+          });
+          database.messages = Array.from(msgMap.values());
+        }
+        if (payload.systemSettings) {
+          database.systemSettings = { ...(database.systemSettings || {}), ...payload.systemSettings };
+        }
+      }
+
+      saveDB(database);
+      saveToFirestore(database);
+
+      broadcastToAll({
+        type: "system_db_restored",
+        payload: {
+          message: "پایگاه داده سیستم با موفقیت بازیابی شد.",
+          timestamp: new Date().toISOString()
+        }
+      });
+
+      res.json({
+        success: true,
+        message: "پشتیبان با موفقیت روی سیستم اعمال و همگام‌سازی شد.",
+        stats: {
+          usersCount: Object.keys(database.users).length,
+          chatsCount: database.chats.length,
+          messagesCount: database.messages.length
+        }
+      });
+    } catch (e: any) {
+      console.error("Error restoring database backup:", e);
+      res.status(500).json({ error: "خطا در پردازش فایل پشتیبان: " + (e?.message || e) });
+    }
+  });
+
+  // Export personal user data backup (Any logged in user)
+  app.post("/api/user/export-data", (req, res) => {
+    const { userId } = req.body;
+    if (!userId) {
+      res.status(400).json({ error: "شناسه کاربر لازم است." });
+      return;
+    }
+
+    const database = loadDB();
+    const user = database.users[userId];
+    if (!user) {
+      res.status(404).json({ error: "کاربر یافت نشد." });
+      return;
+    }
+
+    const myChats = database.chats.filter(c => Array.isArray(c.members) && c.members.includes(userId));
+    const myChatIds = new Set(myChats.map(c => c.id));
+    const myMessages = database.messages.filter(m => m.senderId === userId || myChatIds.has(m.chatId));
+
+    const sanitizeUser = (u: any) => {
+      const { passwordHash, salt, twoFactorSecret, ...safe } = u;
+      return safe;
+    };
+
+    res.json({
+      success: true,
+      backup: {
+        exportedAt: new Date().toISOString(),
+        user: sanitizeUser(user),
+        chatsCount: myChats.length,
+        messagesCount: myMessages.length,
+        chats: myChats,
+        messages: myMessages
+      }
+    });
   });
 
   // Filter/Unfilter a target user (Owner access only)
@@ -2078,15 +2594,15 @@ async function startServer() {
     return null;
   }
 
-  // Robust Gemini content generation with retry (exponential backoff) and model fallbacks (e.g. if 503 Service Unavailable)
+  // Robust Gemini content generation with retry (exponential backoff) and model fallbacks (e.g. if 503 Service Unavailable or 429 Quota Exceeded)
   async function callGeminiWithRetryAndFallback(params: {
     contents: any;
     config?: any;
     primaryModel?: string;
   }) {
     const ai = getGeminiClient();
-    const primaryModel = params.primaryModel || "gemini-3.5-flash";
-    const models = [primaryModel, "gemini-flash-latest", "gemini-3.1-flash-lite"];
+    const primaryModel = params.primaryModel || "gemini-3.6-flash";
+    const models = Array.from(new Set([primaryModel, "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"]));
     let lastError: any = null;
 
     for (const modelName of models) {
@@ -2105,8 +2621,11 @@ async function startServer() {
           console.error(`[Gemini API] Model ${modelName} failed on attempt ${attempt}:`, error.message || error);
           
           const status = error.status || error.statusCode || (error.error && error.error.code);
-          if (status === 400) {
-            console.log(`[Gemini API] Status 400 (Bad Request), skipping further retries for this model.`);
+          const errorMsg = String(error.message || "").toLowerCase();
+          const isQuotaExceeded = status === 429 || errorMsg.includes("429") || errorMsg.includes("quota") || errorMsg.includes("resource_exhausted");
+
+          if (status === 400 || isQuotaExceeded) {
+            console.log(`[Gemini API] Model ${modelName} returned status ${status || 'QuotaExceeded'}, skipping further retries for this model and attempting next fallback.`);
             break;
           }
 
@@ -2156,7 +2675,7 @@ ${JSON.stringify(messages.slice(-100), null, 2)}
 
       const result = await callGeminiWithRetryAndFallback({
         contents: prompt,
-        primaryModel: "gemini-3.5-flash"
+        primaryModel: "gemini-3.6-flash"
       });
 
       res.json({ success: true, analysis: result.text });
@@ -2188,7 +2707,7 @@ Instructions:
 3. Return ONLY the final English prompt string without any conversational text, explanations, or quotes.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       contents: [
         { text: expandSystemInstruction },
         { text: `Raw User Input: "${rawPrompt}"` }
@@ -2422,7 +2941,7 @@ ${context || "پیامی در چت وجود ندارد."}
 
       const result = await callGeminiWithRetryAndFallback({
         contents: fullPrompt,
-        primaryModel: "gemini-3.5-flash"
+        primaryModel: "gemini-3.6-flash"
       });
 
       res.json({ success: true, reply: result.text });
@@ -2509,7 +3028,7 @@ ${context || "پیامی در چت وجود ندارد."}
             text: "لطفاً این فایل صوتی را با دقت بسیار بالا به زبان فارسی رونویسی (Transcribe) کن. فقط و فقط متن گفتار موجود در ویس را خروجی بده. از اضافه کردن هرگونه توضیح اضافی، مقدمه، موخره یا تگ‌های متنی خودداری کن.",
           },
         ],
-        primaryModel: "gemini-3.5-flash"
+        primaryModel: "gemini-3.6-flash"
       });
 
       res.json({ success: true, text: result.text || "" });
@@ -2541,7 +3060,7 @@ ${context || "پیامی در چت وجود ندارد."}
 اگر این متن به زبان فارسی است، آن را به زبان انگلیسی ترجمه کن.
 اگر این متن به زبان انگلیسی یا هر زبان دیگری است، آن را به زبان فارسی روان ترجمه کن.
 توجه بسیار مهم: فقط و فقط متن ترجمه شده نهایی را خروجی بده و هیچ توضیح اضافی دیگری اضافه نکن.`,
-        primaryModel: "gemini-3.5-flash"
+        primaryModel: "gemini-3.6-flash"
       });
 
       res.json({ success: true, translatedText: result.text || "" });
@@ -2583,7 +3102,7 @@ ${JSON.stringify(messages.slice(-8), null, 2)}
             }
           }
         },
-        primaryModel: "gemini-3.5-flash"
+        primaryModel: "gemini-3.6-flash"
       });
 
       let suggestions = [];
@@ -2743,7 +3262,7 @@ ${JSON.stringify(messages.slice(-8), null, 2)}
       const systemInstruction = "تو یک دستیار هوش مصنوعی باهوش، فوق‌العاده دقیق و مسلط به زبان فارسی هستی که از طریق وب‌سرویس عمومی سیستم چت پرهام فراخوانی شدی.";
       const finalPrompt = `${systemInstruction}\n\nتاریخچه گفتگو:\n${historyText}\nپرهام AI:`;
 
-      const selectedModel = model || "gemini-3.5-flash"; // Recommended model
+      const selectedModel = model || "gemini-3.6-flash"; // Recommended model
 
       const result = await callGeminiWithRetryAndFallback({
         contents: finalPrompt,
@@ -3398,6 +3917,7 @@ ${JSON.stringify(messages.slice(-8), null, 2)}
           
           const filteredUsers: { [id: string]: any } = {};
           Object.values(database.users).forEach((u: any) => {
+            const isPlusUser = u.subscriptionTier === 'plus' || u.role === 'owner' || u.role === 'admin' || u.username?.toLowerCase() === 'parham';
             filteredUsers[u.id] = {
               id: u.id,
               username: u.username,
@@ -3405,6 +3925,12 @@ ${JSON.stringify(messages.slice(-8), null, 2)}
               bio: u.bio,
               avatarColor: u.avatarColor,
               avatarEmoji: u.avatarEmoji,
+              avatarUrl: u.avatarUrl,
+              bubbleBorderFrame: u.bubbleBorderFrame || 'default',
+              subscriptionTier: isPlusUser ? 'plus' : 'free',
+              subscriptionPlan: u.subscriptionPlan || (isPlusUser ? 'plus' : 'free'),
+              subscriptionEndDate: u.subscriptionEndDate,
+              grantedByAdmin: !!u.grantedByAdmin,
               publicKey: u.publicKey,
               isOnline: u.id === "usr_parham_ai" || activeConnections.has(u.id),
               lastSeen: u.lastSeen,
@@ -3440,6 +3966,8 @@ ${JSON.stringify(messages.slice(-8), null, 2)}
           if (!authenticatedUserId) return;
           const { msg } = payload;
           const database = loadDB();
+          const senderUser = database.users[authenticatedUserId];
+          const isPlusSender = senderUser?.subscriptionTier === 'plus' || senderUser?.role === 'owner' || senderUser?.role === 'admin' || senderUser?.username?.toLowerCase() === 'parham';
 
           // Guard: Verify if recipient blocked sender
           const chatObj = database.chats.find(c => c.id === msg.chatId);
@@ -3471,7 +3999,9 @@ ${JSON.stringify(messages.slice(-8), null, 2)}
             ...msg,
             id: msg.id || "msg_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7),
             senderId: authenticatedUserId,
-            senderNickname: database.users[authenticatedUserId]?.nickname || "کاربر ناشناس",
+            senderNickname: senderUser?.nickname || "کاربر ناشناس",
+            senderSubscriptionTier: isPlusSender ? 'plus' : 'free',
+            bubbleBorderFrame: senderUser?.bubbleBorderFrame || 'default',
             timestamp: new Date().toISOString(),
             reactions: {},
             status: "sent"
@@ -3606,7 +4136,7 @@ ${JSON.stringify(messages.slice(-8), null, 2)}
                 const result = await callGeminiWithRetryAndFallback({
                   contents: geminiContents,
                   config: config,
-                  primaryModel: settings.aiModel || "gemini-3.5-flash"
+                  primaryModel: settings.aiModel || "gemini-3.6-flash"
                 });
 
                 let botResponseText = result.text || "من متوجه این پیام نشدم. لطفاً دوباره بنویسید.";

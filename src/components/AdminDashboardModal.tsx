@@ -24,7 +24,15 @@ import {
   Volume2,
   FileText,
   Clock,
-  Heart
+  Heart,
+  Database,
+  Download,
+  Upload,
+  Eye,
+  ArrowRight,
+  File,
+  Music,
+  Filter
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -65,7 +73,7 @@ export default function AdminDashboardModal({
     welcomeMessage: "",
     maintenanceMode: false,
     maintenanceMessage: "",
-    aiModel: "gemini-3.5-flash",
+    aiModel: "gemini-3.6-flash",
     aiSystemInstructions: "",
     aiTemperature: 0.7,
     aiSearchGrounding: false,
@@ -217,7 +225,7 @@ export default function AdminDashboardModal({
       return;
     }
 
-    const confirmMsg = `⚠️ هشدار بحرانی!\nآیا از حذف کامل و برگشت‌ناپذیر حساب کاربری «${targetUser.nickname}» (@${targetUser.username}) اطمینان دارید؟\nتمام جلسات فعال کاربر بسته شده و شناسه ایشان کلاً پاک می‌شود.`;
+    const confirmMsg = `⚠️ هشدار بسیار مهم:\nآیا از حذف کامل و دائمی حساب کاربری @${targetUser.username} (${targetUser.nickname}) اطمینان کامل دارید؟\n\nبا این کار، حساب کاربری، تمامی پیام‌های ارسال شده توسط او و چت‌های خصوصی (PV) مربوط به او کاملاً پاک خواهد شد و هیچ اثری از آن باقی نخواهد ماند.`;
     if (!window.confirm(confirmMsg)) return;
 
     try {
@@ -232,7 +240,7 @@ export default function AdminDashboardModal({
 
       const data = await response.json();
       if (response.ok && data.success) {
-        alert(data.message || "حساب کاربری با موفقیت حذف شد.");
+        alert(data.message || "حساب کاربری با موفقیت و بدون باقی ماندن هیچ اثری حذف شد.");
         setUsers(prev => prev.filter(u => u.id !== targetUser.id));
         fetchSettingsAndMetrics();
       } else {
@@ -469,6 +477,174 @@ export default function AdminDashboardModal({
     }
   };
 
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+
+  const handleExportBackup = async () => {
+    try {
+      setIsExporting(true);
+      const res = await fetch("/api/admin/export-backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requesterId: currentUser.id })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(
+          JSON.stringify(data.backup, null, 2)
+        )}`;
+        const downloadAnchor = document.createElement("a");
+        downloadAnchor.setAttribute("href", jsonString);
+        downloadAnchor.setAttribute(
+          "download",
+          `parham_messenger_backup_${new Date().toISOString().split("T")[0]}.json`
+        );
+        document.body.appendChild(downloadAnchor);
+        downloadAnchor.click();
+        downloadAnchor.remove();
+        alert("نسخه پشتیبان کامل پایگاه داده با موفقیت دانلود شد.");
+      } else {
+        alert(data.error || "خطا در دانلود بک‌آپ.");
+      }
+    } catch (e) {
+      console.error("Backup export error:", e);
+      alert("خطا در برقراری ارتباط با سرور برای دریافت بک‌آپ.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!confirm("آیا از بازیابی این فایل بک‌آپ اطمینان دارید؟ داده‌های موجود ادغام و بروزرسانی خواهند شد.")) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        setIsImporting(true);
+        const content = event.target?.result as string;
+        const parsed = JSON.parse(content);
+
+        const res = await fetch("/api/admin/import-backup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requesterId: currentUser.id,
+            backupData: parsed,
+            mode: "merge"
+          })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.success) {
+          alert(`نسخه پشتیبان با موفقیت بازیابی شد!\nتعداد کاربران: ${data.stats?.usersCount}\nتعداد چت‌ها: ${data.stats?.chatsCount}\nتعداد پیام‌ها: ${data.stats?.messagesCount}`);
+          fetchSettingsAndMetrics();
+        } else {
+          alert(data.error || "خطا در بازیابی نسخه پشتیبان.");
+        }
+      } catch (err: any) {
+        console.error("Import backup file parse error:", err);
+        alert("فایل پشتیبان انتخاب شده نامعتبر یا دارای فرمت نادرست است.");
+      } finally {
+        setIsImporting(false);
+        e.target.value = "";
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // Chat & Message Content Inspection State for Owner Supervision
+  const [inspectingChat, setInspectingChat] = useState<{ id: string; name: string; type?: string } | null>(null);
+  const [inspectingUser, setInspectingUser] = useState<{ id: string; nickname: string; username: string } | null>(null);
+  const [inspectedMessages, setInspectedMessages] = useState<any[]>([]);
+  const [loadingInspection, setLoadingInspection] = useState(false);
+  const [inspectionQuery, setInspectionQuery] = useState("");
+  const [inspectionFilter, setInspectionFilter] = useState<"all" | "text" | "media">("all");
+
+  const fetchMessagesForInspection = async (chatId?: string, targetUserId?: string) => {
+    try {
+      setLoadingInspection(true);
+      let url = `/api/admin/chat-messages?requesterId=${currentUser.id}`;
+      if (chatId) url += `&chatId=${encodeURIComponent(chatId)}`;
+      if (targetUserId) url += `&targetUserId=${encodeURIComponent(targetUserId)}`;
+
+      const res = await fetch(url);
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setInspectedMessages(data.messages || []);
+      } else {
+        alert(data.error || "خطا در دریافت پیام‌های چت جهت نظارت.");
+      }
+    } catch (err) {
+      console.error("Error fetching inspected messages:", err);
+    } finally {
+      setLoadingInspection(false);
+    }
+  };
+
+  const handleOpenChatInspector = (chat: { id: string; name: string; type?: string }) => {
+    setInspectingChat(chat);
+    setInspectingUser(null);
+    setInspectionQuery("");
+    setInspectionFilter("all");
+    fetchMessagesForInspection(chat.id, undefined);
+  };
+
+  const handleOpenUserMessagesInspector = (u: { id: string; nickname: string; username: string }) => {
+    setInspectingUser(u);
+    setInspectingChat(null);
+    setInspectionQuery("");
+    setInspectionFilter("all");
+    fetchMessagesForInspection(undefined, u.id);
+  };
+
+  const handleDeleteSingleMessage = async (messageId: string) => {
+    if (!confirm("آیا از حذف این پیام توسط نظارت مالک اطمینان دارید؟ پیام بلافاصله از گفتگوها و حافظه سیستم پاک خواهد شد.")) {
+      return;
+    }
+    try {
+      const res = await fetch("/api/admin/delete-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requesterId: currentUser.id,
+          messageId
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setInspectedMessages(prev => prev.filter(m => m.id !== messageId));
+        fetchSettingsAndMetrics();
+      } else {
+        alert(data.error || "خطا در حذف پیام.");
+      }
+    } catch (e) {
+      console.error("Delete message error:", e);
+      alert("خطا در برقراری ارتباط با سرور.");
+    }
+  };
+
+  const filteredInspectedMessages = inspectedMessages.filter(msg => {
+    const q = inspectionQuery.toLowerCase();
+    const matchesSearch =
+      !q ||
+      (msg.text && msg.text.toLowerCase().includes(q)) ||
+      (msg.senderNickname && msg.senderNickname.toLowerCase().includes(q)) ||
+      (msg.senderUsername && msg.senderUsername.toLowerCase().includes(q)) ||
+      (msg.fileName && msg.fileName.toLowerCase().includes(q));
+
+    const matchesFilter =
+      inspectionFilter === "all" ||
+      (inspectionFilter === "text" && !msg.mediaUrl) ||
+      (inspectionFilter === "media" && !!msg.mediaUrl);
+
+    return matchesSearch && matchesFilter;
+  });
+
   // Compute local values
   const totalCount = users.length;
   const filteredCount = users.filter(u => u.isFiltered).length;
@@ -530,11 +706,11 @@ export default function AdminDashboardModal({
         </div>
 
         {/* Main Body Grid */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Side Tabs Navigation */}
-          <div className="w-56 shrink-0 bg-slate-950/35 border-l border-slate-800/50 p-4 flex flex-col justify-between">
-            <div className="space-y-1.5">
-              <span className="text-[9px] font-black text-slate-500 tracking-wider px-2 block mb-2">منوی ناوبری پنل</span>
+        <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+          {/* Side / Top Tabs Navigation */}
+          <div className="w-full md:w-56 shrink-0 bg-slate-950/35 border-b md:border-b-0 md:border-l border-slate-800/50 p-2 md:p-4 flex md:flex-col justify-between overflow-x-auto custom-scrollbar">
+            <div className="flex md:flex-col items-center md:items-stretch gap-1.5 min-w-max md:min-w-0 w-full">
+              <span className="hidden md:block text-[9px] font-black text-slate-500 tracking-wider px-2 mb-2">منوی ناوبری پنل</span>
               {[
                 { id: "dashboard", label: "میز کار و آمارها", icon: LayoutDashboard },
                 { id: "users", label: "مدیریت کاربران", icon: Users, badge: totalCount },
@@ -553,18 +729,18 @@ export default function AdminDashboardModal({
                       setActiveTab(t.id as TabType);
                       setEditingUser(null);
                     }}
-                    className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-between border ${
+                    className={`px-3 py-2 md:py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-between border shrink-0 ${
                       isActive
                         ? "bg-gradient-to-r from-amber-600/15 to-slate-800/40 border-amber-500/30 text-amber-400"
                         : "bg-transparent border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200"
                     }`}
                   >
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex items-center gap-2">
                       <IconComponent className={`w-4 h-4 ${isActive ? "text-amber-400" : "text-slate-500"}`} />
-                      <span>{t.label}</span>
+                      <span className="whitespace-nowrap">{t.label}</span>
                     </div>
                     {t.badge !== undefined && t.badge > 0 && (
-                      <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md ${isActive ? "bg-amber-400 text-slate-950" : "bg-slate-800 text-slate-400"}`}>
+                      <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md mr-1.5 ${isActive ? "bg-amber-400 text-slate-950" : "bg-slate-800 text-slate-400"}`}>
                         {t.badge}
                       </span>
                     )}
@@ -573,7 +749,7 @@ export default function AdminDashboardModal({
               })}
             </div>
 
-            <div className="p-3.5 bg-slate-900/60 border border-slate-800/60 rounded-2xl flex items-center gap-2.5">
+            <div className="hidden md:flex p-3.5 bg-slate-900/60 border border-slate-800/60 rounded-2xl items-center gap-2.5 mt-4">
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></div>
               <div className="text-[10px]">
                 <span className="text-slate-400 block font-bold">ارتباط با سرور اصلی</span>
@@ -1048,6 +1224,18 @@ export default function AdminDashboardModal({
                                   <span className="text-[8.5px] font-mono text-slate-500">ID: {u.id}</span>
                                   <div className="flex items-center gap-1.5">
                                     <button
+                                      onClick={() => {
+                                        setActiveTab("chats");
+                                        handleOpenUserMessagesInspector(u);
+                                      }}
+                                      className="px-2 py-1 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-[10px] font-bold rounded-lg transition flex items-center gap-1"
+                                      title="بازرسی و نظارت بر کلیه پیام‌های ارسالی این کاربر"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                      <span>پیام‌ها</span>
+                                    </button>
+
+                                    <button
                                       onClick={() => handleStartEditing(u)}
                                       className="p-1.5 bg-slate-800 hover:bg-slate-700 hover:text-amber-400 text-slate-300 rounded-lg transition"
                                       title="ویرایش دسترسی‌ها و اطلاعات حساب"
@@ -1194,63 +1382,267 @@ export default function AdminDashboardModal({
                 {/* TAB 3: CHAT ROOMS MANAGEMENT */}
                 {activeTab === "chats" && (
                   <div className="space-y-4">
-                    <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-                      <div>
-                        <h4 className="text-xs font-black text-white">مدیریت گروه‌ها و کانال‌های ایجاد شده</h4>
-                        <p className="text-[10px] text-slate-500">مشاهده مشخصات کلی، تعداد اعضا و اختیار کامل در حذف محافل نامناسب</p>
-                      </div>
-                      <button
-                        onClick={fetchChats}
-                        className="p-1.5 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-lg transition"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                    {inspectingChat || inspectingUser ? (
+                      /* CHAT & USER MESSAGE CONTENT INSPECTION PANEL */
+                      <div className="space-y-4">
+                        {/* Inspector Header */}
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-4 bg-slate-900/80 border border-amber-500/30 rounded-2xl">
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => {
+                                setInspectingChat(null);
+                                setInspectingUser(null);
+                              }}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700"
+                            >
+                              <ArrowRight className="w-4 h-4" />
+                              <span>بازگشت به لیست</span>
+                            </button>
+                            <div>
+                              <h4 className="text-xs font-black text-white flex items-center gap-2">
+                                <Eye className="w-4 h-4 text-amber-400 animate-pulse" />
+                                <span>
+                                  {inspectingChat
+                                    ? `بازرسی و نظارت بر چت: ${inspectingChat.name}`
+                                    : `بازرسی و نظارت بر تمامی پیام‌های کاربر: ${inspectingUser?.nickname} (@${inspectingUser?.username})`}
+                                </span>
+                              </h4>
+                              <p className="text-[10px] text-slate-400 mt-0.5">
+                                نظارت بر محتوا جهت جلوگیری از انتشار پیام‌های مستهجن، خلاف قوانین، اسپم یا کلاهبرداری
+                              </p>
+                            </div>
+                          </div>
 
-                    <div className="grid grid-cols-1 gap-3">
-                      {chats.map(chat => {
-                        const isGlobal = chat.id === "global-group";
-                        return (
-                          <div
-                            key={chat.id}
-                            className="p-4 bg-slate-900/60 border border-slate-800/80 rounded-2xl flex items-center justify-between hover:border-slate-700 transition"
-                          >
-                            <div className="flex items-center gap-3">
-                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold shadow ${chat.avatarColor || "bg-slate-800"}`}>
-                                {chat.avatarEmoji || "👥"}
-                              </div>
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs font-black text-white">{chat.name}</span>
-                                  <span className={`px-1.5 py-0.5 text-[8px] font-black rounded ${chat.type === "channel" ? "bg-purple-500/10 text-purple-400 border border-purple-500/20" : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"}`}>
-                                    {chat.type === "channel" ? "کانال" : "گروه"}
-                                  </span>
-                                  {isGlobal && (
-                                    <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[8px] rounded font-black">پیش‌فرض سیستم</span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => fetchMessagesForInspection(inspectingChat?.id, inspectingUser?.id)}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition flex items-center gap-1.5 border border-slate-700"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${loadingInspection ? "animate-spin text-amber-400" : ""}`} />
+                              <span>بروزرسانی پیام‌ها</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Search and Filters Bar */}
+                        <div className="flex flex-col md:flex-row gap-3 items-center justify-between">
+                          <div className="relative w-full md:w-80">
+                            <Search className="w-4 h-4 text-slate-500 absolute top-3 right-3" />
+                            <input
+                              type="text"
+                              placeholder="جستجوی کلمه، لغت، شناسه کاربر یا نام فایل..."
+                              value={inspectionQuery}
+                              onChange={e => setInspectionQuery(e.target.value)}
+                              className="w-full pr-9 pl-4 py-2 bg-slate-950 border border-slate-800/80 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-500 transition"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-2 overflow-x-auto w-full md:w-auto">
+                            <button
+                              onClick={() => setInspectionFilter("all")}
+                              className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition ${
+                                inspectionFilter === "all" ? "bg-amber-600/10 border-amber-500/30 text-amber-400" : "bg-transparent border-slate-850 text-slate-400"
+                              }`}
+                            >
+                              همه پیام‌ها ({inspectedMessages.length})
+                            </button>
+                            <button
+                              onClick={() => setInspectionFilter("text")}
+                              className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition ${
+                                inspectionFilter === "text" ? "bg-amber-600/10 border-amber-500/30 text-amber-400" : "bg-transparent border-slate-850 text-slate-400"
+                              }`}
+                            >
+                              متنی ({inspectedMessages.filter(m => !m.mediaUrl).length})
+                            </button>
+                            <button
+                              onClick={() => setInspectionFilter("media")}
+                              className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition ${
+                                inspectionFilter === "media" ? "bg-amber-600/10 border-amber-500/30 text-amber-400" : "bg-transparent border-slate-850 text-slate-400"
+                              }`}
+                            >
+                              دارای عکس/رسانه/فایل ({inspectedMessages.filter(m => !!m.mediaUrl).length})
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Messages List Container */}
+                        <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1 custom-scrollbar">
+                          {loadingInspection ? (
+                            <div className="p-10 text-center bg-slate-950/40 border border-slate-800/60 rounded-2xl">
+                              <RefreshCw className="w-6 h-6 text-amber-400 animate-spin mx-auto mb-2" />
+                              <p className="text-xs text-slate-400 font-bold">در حال بارگذاری و بازرسی پیام‌های سرور...</p>
+                            </div>
+                          ) : filteredInspectedMessages.length === 0 ? (
+                            <div className="p-10 text-center bg-slate-950/40 border border-slate-800/60 rounded-2xl">
+                              <ShieldCheck className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                              <p className="text-xs text-slate-400 font-bold">هیچ پیامی یافت نشد.</p>
+                            </div>
+                          ) : (
+                            filteredInspectedMessages.map(msg => (
+                              <div
+                                key={msg.id}
+                                className="p-4 bg-slate-950/60 border border-slate-800/80 hover:border-slate-700 rounded-2xl space-y-2.5 transition"
+                              >
+                                {/* Message Info Header */}
+                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                  <div className="flex items-center gap-2.5">
+                                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm font-bold shadow ${msg.senderAvatarColor || "bg-slate-800"}`}>
+                                      {msg.senderAvatarEmoji || "👤"}
+                                    </div>
+                                    <div>
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-xs font-black text-white">{msg.senderNickname}</span>
+                                        <span className="text-[10px] text-slate-400 font-mono">@{msg.senderUsername}</span>
+                                        {msg.chatName && (
+                                          <span className="px-2 py-0.5 bg-slate-800 text-slate-300 text-[9px] font-bold rounded-md border border-slate-700">
+                                            {msg.chatName}
+                                          </span>
+                                        )}
+                                        {msg.isSenderFiltered && (
+                                          <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 text-[8px] font-black rounded border border-red-500/30">
+                                            کاربر مسدود شده
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span className="text-[9px] text-slate-500 block mt-0.5 font-mono">
+                                        {new Date(msg.timestamp).toLocaleDateString("fa-IR")} - {new Date(msg.timestamp).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" })}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {/* Controls */}
+                                  <div className="flex items-center gap-2">
+                                    {!msg.isSenderFiltered && msg.senderRole !== "owner" && (
+                                      <button
+                                        onClick={() => handleToggleFilter({ id: msg.senderId, nickname: msg.senderNickname, username: msg.senderUsername, isFiltered: false })}
+                                        className="px-2.5 py-1 bg-red-950/40 hover:bg-red-600/30 border border-red-500/30 text-red-300 text-[9.5px] font-bold rounded-lg transition flex items-center gap-1"
+                                        title="مسدودسازی سریع کاربر فرستنده به دلیل تخلف"
+                                      >
+                                        <Ban className="w-3 h-3" />
+                                        <span>مسدودسازی کاربر</span>
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={() => handleDeleteSingleMessage(msg.id)}
+                                      className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white text-[10.5px] font-black rounded-lg transition flex items-center gap-1 shadow-md"
+                                      title="حذف پیام به دلیل محتوای مستهجن یا خلاف قانون"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <span>حذف پیام</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Message Body Content */}
+                                <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-850 text-xs text-slate-200 leading-relaxed font-sans select-text">
+                                  {msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
+
+                                  {/* Media Preview if attached */}
+                                  {msg.mediaUrl && (
+                                    <div className="mt-2.5 pt-2 border-t border-slate-800">
+                                      {msg.mediaType === "image" || msg.mediaUrl.match(/\.(jpeg|jpg|gif|png|webp)/i) ? (
+                                        <div className="relative group max-w-xs">
+                                          <img
+                                            src={msg.mediaUrl}
+                                            alt="Media attachment"
+                                            className="rounded-lg max-h-48 object-cover border border-slate-700 shadow"
+                                          />
+                                        </div>
+                                      ) : msg.mediaType === "audio" || msg.mediaUrl.match(/\.(mp3|ogg|wav|webm)/i) ? (
+                                        <audio controls src={msg.mediaUrl} className="w-full h-8 mt-1" />
+                                      ) : (
+                                        <a
+                                          href={msg.mediaUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-750 text-sky-400 text-xs rounded-lg border border-slate-700 font-mono"
+                                        >
+                                          <FileText className="w-4 h-4" />
+                                          <span>{msg.fileName || "دانلود فایل پیوست"}</span>
+                                        </a>
+                                      )}
+                                    </div>
                                   )}
                                 </div>
-                                <span className="text-[9.5px] text-slate-400 block mt-0.5 leading-relaxed">
-                                  سازنده: <span className="font-bold text-slate-300">{chat.creatorNickname}</span> • تعداد اعضا: <span className="text-amber-400 font-mono font-bold">{chat.membersCount} کاربر</span>
-                                </span>
-                                <span className="text-[9px] text-slate-500 block mt-0.5 truncate max-w-[450px]">
-                                  {chat.description || "بدون توضیح ثبت شده..."}
-                                </span>
                               </div>
-                            </div>
-
-                            {!isGlobal && (
-                              <button
-                                onClick={() => handleDeleteChat(chat.id, chat.name)}
-                                className="p-2 bg-red-600/10 hover:bg-red-600 border border-red-500/20 text-red-400 hover:text-white rounded-xl transition flex items-center gap-1 text-[10px] font-bold"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                <span>حذف کامل</span>
-                              </button>
-                            )}
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      /* LIST OF ALL CHATS WITH INSPECTION BUTTON */
+                      <>
+                        <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+                          <div>
+                            <h4 className="text-xs font-black text-white">مدیریت و نظارت بر چت‌ها، گروه‌ها و کانال‌ها</h4>
+                            <p className="text-[10px] text-slate-500">مشاهده مشخصات کلی، بازدید محتوا و حذف پیام‌ها یا کانال‌های خلاف قوانین</p>
                           </div>
-                        );
-                      })}
-                    </div>
+                          <button
+                            onClick={fetchChats}
+                            className="p-1.5 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-lg transition"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-3">
+                          {chats.map(chat => {
+                            const isGlobal = chat.id === "global-group";
+                            return (
+                              <div
+                                key={chat.id}
+                                className="p-4 bg-slate-900/60 border border-slate-800/80 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-3 hover:border-slate-700 transition"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold shadow shrink-0 ${chat.avatarColor || "bg-slate-800"}`}>
+                                    {chat.avatarEmoji || "👥"}
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="text-xs font-black text-white">{chat.name}</span>
+                                      <span className={`px-1.5 py-0.5 text-[8px] font-black rounded ${chat.type === "channel" ? "bg-purple-500/10 text-purple-400 border border-purple-500/20" : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"}`}>
+                                        {chat.type === "channel" ? "کانال" : "گروه"}
+                                      </span>
+                                      {isGlobal && (
+                                        <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[8px] rounded font-black">پیش‌فرض سیستم</span>
+                                      )}
+                                    </div>
+                                    <span className="text-[9.5px] text-slate-400 block mt-0.5 leading-relaxed">
+                                      سازنده: <span className="font-bold text-slate-300">{chat.creatorNickname}</span> • تعداد اعضا: <span className="text-amber-400 font-mono font-bold">{chat.membersCount} کاربر</span>
+                                    </span>
+                                    <span className="text-[9px] text-slate-500 block mt-0.5 truncate max-w-[450px]">
+                                      {chat.description || "بدون توضیح ثبت شده..."}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 self-end md:self-auto">
+                                  <button
+                                    onClick={() => handleOpenChatInspector(chat)}
+                                    className="px-3.5 py-2 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 rounded-xl transition flex items-center gap-1.5 text-[10px] font-bold"
+                                    title="بازدید و نظارت محتوا و پیام‌های این چت"
+                                  >
+                                    <Eye className="w-3.5 h-3.5 text-amber-400" />
+                                    <span>بازدید و نظارت پیام‌ها</span>
+                                  </button>
+
+                                  {!isGlobal && (
+                                    <button
+                                      onClick={() => handleDeleteChat(chat.id, chat.name)}
+                                      className="p-2 bg-red-600/10 hover:bg-red-600 border border-red-500/20 text-red-400 hover:text-white rounded-xl transition flex items-center gap-1 text-[10px] font-bold"
+                                      title="حذف کامل این کانال/گروه"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <span>حذف کانال</span>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -1530,13 +1922,14 @@ export default function AdminDashboardModal({
                           <span className="text-xs font-black text-white block">انتخاب مدل زبانی فعال</span>
                           <span className="text-[9px] text-slate-500 block">مدلی که برای پردازش چت‌ها و تحلیل فایل‌های آپلود شده استفاده می‌شود.</span>
                           <select
-                            value={systemSettings.aiModel || "gemini-3.5-flash"}
+                            value={systemSettings.aiModel || "gemini-3.6-flash"}
                             onChange={e => handleUpdateSystemSettings({ aiModel: e.target.value })}
                             className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
                           >
-                            <option value="gemini-3.5-flash">Gemini 3.5 Flash (فوق‌العاده سریع، چندرسانه‌ای بهینه - پیشنهادی)</option>
+                            <option value="gemini-3.6-flash">Gemini 3.6 Flash (فوق‌العاده سریع، چندرسانه‌ای بهینه - پیشنهادی)</option>
+                            <option value="gemini-flash-latest">Gemini Flash Latest (آخرین نسخه سریع جمنی)</option>
+                            <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite (کم‌مصرف و پرسرعت)</option>
                             <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (فوق پیشرفته، تفکر عمیق و منطق استدلالی بالا)</option>
-                            <option value="gemini-3.1-flash">Gemini 3.1 Flash (سرعت عالی و پایداری بالا)</option>
                           </select>
                         </div>
 
@@ -1576,6 +1969,41 @@ export default function AdminDashboardModal({
                             placeholder="تو یک دستیار هوش مصنوعی صمیمی با نام پرهام AI هستی..."
                             className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
                           />
+                        </div>
+
+                        {/* Backup & System Data Section */}
+                        <div className="p-4 bg-slate-900/60 border border-slate-800 rounded-2xl space-y-3 mt-4">
+                          <div className="flex items-center gap-2">
+                            <Database className="w-4 h-4 text-emerald-400" />
+                            <span className="text-xs font-black text-white">پشتیبان‌گیری دائم و بازیابی پایگاه داده</span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 leading-relaxed">
+                            تمام پیام‌ها، پروفایل‌ها، گروه‌ها و تنظیمات به صورت همزمان روی ۴ لایه دیسک محلی و فایرپیس ایمن‌سازی شده‌اند. شما می‌توانید هر زمان یک نسخه پشتیبان آفلاین با کیفیت کاملاً یکپارچه دانلود کرده یا نسخه پشتیبان قبلی را با یک کلیک بازیابی فرمایید.
+                          </p>
+
+                          <div className="flex flex-wrap items-center gap-3 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleExportBackup}
+                              disabled={isExporting}
+                              className="px-3.5 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 font-bold text-xs rounded-xl flex items-center gap-2 transition"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              {isExporting ? "در حال دریافت..." : "دانلود فایل بک‌آپ کامل (JSON)"}
+                            </button>
+
+                            <label className="px-3.5 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 font-bold text-xs rounded-xl flex items-center gap-2 cursor-pointer transition">
+                              <Upload className="w-3.5 h-3.5" />
+                              {isImporting ? "در حال بارگذاری..." : "بازیابی و بارگذاری فایل بک‌آپ"}
+                              <input
+                                type="file"
+                                accept=".json"
+                                onChange={handleImportBackup}
+                                className="hidden"
+                                disabled={isImporting}
+                              />
+                            </label>
+                          </div>
                         </div>
                       </div>
                     </div>

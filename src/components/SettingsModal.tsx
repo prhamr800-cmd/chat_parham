@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { 
   X, User, Smartphone, ShieldAlert, Palette, Shield, Check, Copy, Trash, Save, LogOut, Lock, Laptop,
-  Code, Key, Cpu, Terminal, RefreshCw
+  Code, Key, Cpu, Terminal, RefreshCw, Download, Database
 } from "lucide-react";
 import { themes, ThemeStyle } from "../utils/theme";
 
@@ -165,6 +165,43 @@ export default function SettingsModal({
       }
     } catch (err) {
       console.error("Error terminating other sessions:", err);
+    }
+  };
+
+  const [isExportingData, setIsExportingData] = useState(false);
+
+  const handleExportUserData = async () => {
+    try {
+      setIsExportingData(true);
+      const res = await fetch("/api/user/export-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(
+          JSON.stringify(data.backup, null, 2)
+        )}`;
+        const downloadAnchor = document.createElement("a");
+        downloadAnchor.setAttribute("href", jsonString);
+        downloadAnchor.setAttribute(
+          "download",
+          `my_messenger_data_${currentUser.username}_${new Date().toISOString().split("T")[0]}.json`
+        );
+        document.body.appendChild(downloadAnchor);
+        downloadAnchor.click();
+        downloadAnchor.remove();
+        setPrivacyMessage("بک‌آپ شخصی داده‌های شما با موفقیت دریافت گردید.");
+        setTimeout(() => setPrivacyMessage(""), 4000);
+      } else {
+        alert(data.error || "خطا در دریافت پشتیبان شخصی.");
+      }
+    } catch (e) {
+      console.error("Export user data error:", e);
+      alert("خطا در برقراری ارتباط با سرور.");
+    } finally {
+      setIsExportingData(false);
     }
   };
 
@@ -447,11 +484,75 @@ export default function SettingsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm dir-rtl" dir="rtl">
-      <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col md:flex-row h-[550px]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/75 backdrop-blur-md dir-rtl" dir="rtl">
+      <div className="w-full max-w-2xl bg-slate-900 border-0 sm:border border-slate-800 rounded-none sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col md:flex-row h-[100dvh] sm:h-[580px] max-h-[100dvh] sm:max-h-[90vh]">
         
-        {/* Settings Sidebar Tabs */}
-        <div className="w-full md:w-56 bg-slate-950 p-4 border-l border-slate-800 flex flex-col justify-between">
+        {/* Mobile Top Header (Visible only on mobile < md) */}
+        <div className="flex md:hidden items-center justify-between p-3.5 bg-slate-950 border-b border-slate-800 shrink-0">
+          <div className="flex items-center gap-2.5">
+            {avatarUrl ? (
+              <img 
+                src={avatarUrl} 
+                alt={nickname} 
+                className="w-9 h-9 rounded-xl object-cover border border-slate-700 shadow-inner"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg shadow-inner ${avatarColor}`}>
+                {avatarEmoji}
+              </div>
+            )}
+            <div className="text-right">
+              <h3 className="text-xs font-black text-white truncate max-w-[140px]">{nickname}</h3>
+              <span className="text-[9px] text-slate-500 font-mono">تنظیمات حساب • @{currentUser.username}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={onLogout}
+              className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition"
+              title="خروج از حساب"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+            <button 
+              onClick={onClose} 
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Mobile Horizontal Scrollable Tabs Bar (Visible only on mobile < md) */}
+        <div className="flex md:hidden overflow-x-auto whitespace-nowrap bg-slate-950 border-b border-slate-800/80 p-2 gap-1.5 custom-scrollbar shrink-0">
+          {[
+            { id: 'profile', label: 'پروفایل', icon: User },
+            { id: 'theme', label: 'پوسته و حاشیه', icon: Palette },
+            { id: 'privacy', label: 'حریم و امنیت', icon: Lock },
+            { id: '2fa', label: 'تأیید ۲مرحله‌ای', icon: Shield },
+            { id: 'password', label: 'تغییر رمز', icon: Key },
+            { id: 'security', label: 'گزارش تخلف', icon: ShieldAlert },
+            { id: 'blocks', label: 'لیست سیاه', icon: Shield },
+          ].map(tab => {
+            const IconComp = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition flex items-center gap-1.5 shrink-0 ${isActive ? (isRedTheme ? 'bg-red-600 text-white shadow-md' : 'bg-blue-600 text-white shadow-md') : 'bg-slate-900/60 text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
+              >
+                <IconComp className="w-3.5 h-3.5" />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Desktop Sidebar Tabs (Visible on md+) */}
+        <div className="hidden md:flex md:w-60 bg-slate-950 p-4 border-l border-slate-800 flex-col justify-between shrink-0">
           <div className="space-y-1">
             <div className="pb-3 border-b border-slate-800 mb-3 flex items-center gap-3">
               {avatarUrl ? (
@@ -497,6 +598,14 @@ export default function SettingsModal({
             </button>
 
             <button 
+              onClick={() => setActiveTab('2fa')}
+              className={`w-full text-right px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2.5 ${activeTab === '2fa' ? (isRedTheme ? 'bg-red-600 text-white' : 'bg-blue-600 text-white') : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
+            >
+              <Shield className="w-4 h-4" />
+              <span>تأیید دو مرحله‌ای</span>
+            </button>
+
+            <button 
               onClick={() => setActiveTab('password')}
               className={`w-full text-right px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2.5 ${activeTab === 'password' ? (isRedTheme ? 'bg-red-600 text-white' : 'bg-blue-600 text-white') : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
             >
@@ -519,8 +628,6 @@ export default function SettingsModal({
               <Shield className="w-4 h-4" />
               <span>لیست مسدود شده‌ها</span>
             </button>
-
-
           </div>
 
           <button
@@ -533,10 +640,10 @@ export default function SettingsModal({
         </div>
 
         {/* Settings Content Area */}
-        <div className="flex-1 p-6 flex flex-col justify-between bg-slate-900 overflow-y-auto">
+        <div className="flex-1 p-4 sm:p-6 flex flex-col justify-between bg-slate-900 overflow-y-auto custom-scrollbar h-full min-h-0">
           <div>
-            {/* Header */}
-            <div className="flex justify-between items-center pb-4 border-b border-slate-800 mb-4">
+            {/* Desktop Header Title */}
+            <div className="hidden md:flex justify-between items-center pb-4 border-b border-slate-800 mb-4">
               <h2 className="text-sm font-extrabold text-white">
                 {activeTab === 'profile' && 'تنظیمات شناسنامه کاربری'}
                 {activeTab === 'theme' && 'شخصی‌سازی پوسته برنامه'}
@@ -580,7 +687,7 @@ export default function SettingsModal({
 
                 <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800/80 space-y-3">
                   <label className="block text-[11px] font-bold text-slate-400">تصویر پروفایل سفارشی (عکس واقعی)</label>
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-4">
                     {avatarUrl ? (
                       <div className="relative group shrink-0">
                         <img 
@@ -604,7 +711,7 @@ export default function SettingsModal({
                       </div>
                     )}
 
-                    <div className="flex-1 space-y-1.5">
+                    <div className="flex-1 space-y-1.5 text-center sm:text-right w-full">
                       <div className="relative">
                         <input
                           type="file"
@@ -616,7 +723,7 @@ export default function SettingsModal({
                         />
                         <label
                           htmlFor="avatar-upload"
-                          className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition cursor-pointer ${isUploadingAvatar ? "opacity-50 pointer-events-none" : ""}`}
+                          className={`inline-flex items-center justify-center gap-1.5 w-full sm:w-auto px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition cursor-pointer ${isUploadingAvatar ? "opacity-50 pointer-events-none" : ""}`}
                         >
                           {isUploadingAvatar ? "در حال آپلود..." : "آپلود عکس جدید"}
                         </label>
@@ -630,13 +737,13 @@ export default function SettingsModal({
 
                 <div>
                   <label className="block text-[11px] font-bold text-slate-400 mb-1.5">انتخاب اموجی نمایه</label>
-                  <div className="flex gap-1 overflow-x-auto pb-1">
+                  <div className="flex gap-1.5 overflow-x-auto pb-1.5 custom-scrollbar">
                     {emojis.map(e => (
                       <button
                         key={e}
                         type="button"
                         onClick={() => setAvatarEmoji(e)}
-                        className={`text-lg p-1.5 rounded-lg border transition shrink-0 ${avatarEmoji === e ? "bg-slate-800 border-blue-500 scale-105" : "bg-slate-950 border-slate-800 hover:bg-slate-900"}`}
+                        className={`text-lg p-2 rounded-xl border transition shrink-0 ${avatarEmoji === e ? "bg-slate-800 border-blue-500 scale-105" : "bg-slate-950 border-slate-800 hover:bg-slate-900"}`}
                       >
                         {e}
                       </button>
@@ -646,7 +753,7 @@ export default function SettingsModal({
 
                 <div>
                   <label className="block text-[11px] font-bold text-slate-400 mb-1.5">رنگ نمایه</label>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2.5 overflow-x-auto pb-1">
                     {colors.map(col => (
                       <button
                         key={col}
@@ -668,7 +775,7 @@ export default function SettingsModal({
 
             {/* TAB: PRIVACY & PASSCODE */}
             {activeTab === 'privacy' && (
-              <div className="space-y-4 text-right overflow-y-auto max-h-[380px] pr-1">
+              <div className="space-y-4 text-right">
                 {/* 1. Visibilities */}
                 <div className="p-3 bg-slate-950 rounded-2xl border border-slate-800/80 space-y-3">
                   <h4 className="text-xs font-bold text-blue-400">تنظیمات رویت و حریم خصوصی شخصی</h4>
@@ -849,6 +956,26 @@ export default function SettingsModal({
                       </div>
                     )}
                   </div>
+                </div>
+
+                {/* 5. Personal Data Export */}
+                <div className="p-3 bg-slate-950 rounded-2xl border border-slate-800/80 space-y-2.5">
+                  <div className="flex items-center gap-2">
+                    <Database className="w-4 h-4 text-sky-400" />
+                    <h4 className="text-xs font-bold text-sky-400">پشتیبان‌گیری از اطلاعات شخصی (Data Export)</h4>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    شما می‌توانید تمام چت‌های شخصی، گروهی و اطلاعات حساب کاربری خود را در قالب یک فایل JSON استخراج و روی سیستم یا موبایل خود ذخیره کنید.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleExportUserData}
+                    disabled={isExportingData}
+                    className="w-full py-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/20 hover:border-sky-500/40 text-xs font-bold rounded-xl transition flex items-center justify-center gap-2"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    {isExportingData ? "در حال استخراج..." : "دانلود نسخه پشتیبان اطلاعات من (JSON)"}
+                  </button>
                 </div>
 
                 {privacyMessage && (
