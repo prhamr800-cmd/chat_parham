@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { 
   X, User, Smartphone, ShieldAlert, Palette, Shield, Check, Copy, Trash, Save, LogOut, Lock, Laptop,
-  Code, Key, Cpu, Terminal, RefreshCw, Download, Database
+  Code, Key, Cpu, Terminal, RefreshCw, Download, Database, Globe
 } from "lucide-react";
 import { themes, ThemeStyle } from "../utils/theme";
 
@@ -13,10 +13,16 @@ interface SettingsModalProps {
   onLogout: () => void;
   users: { [id: string]: any };
   onUnblockUser: (blockedId: string) => void;
+  isLowRamMode?: boolean;
+  onToggleLowRamMode?: () => void;
+  onOpenSubscription?: (featureName?: string) => void;
+  appLanguage?: 'fa' | 'en';
+  onToggleLanguage?: (lang: 'fa' | 'en') => void;
 }
 
 export default function SettingsModal({ 
-  currentUser, currentTheme, onClose, onUpdateProfile, onLogout, users, onUnblockUser 
+  currentUser, currentTheme, onClose, onUpdateProfile, onLogout, users, onUnblockUser,
+  isLowRamMode = false, onToggleLowRamMode, onOpenSubscription, appLanguage = 'fa', onToggleLanguage
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<'profile' | 'theme' | 'privacy' | 'security' | 'blocks' | 'password'>('profile');
   const isRedTheme = currentTheme === 'telegram';
@@ -32,6 +38,12 @@ export default function SettingsModal({
   const [profileMessage, setProfileMessage] = useState("");
 
   const handleBubbleBorderSelect = async (frameId: string) => {
+    if (frameId !== 'default' && currentUser?.subscriptionTier !== 'plus' && currentUser?.role !== 'owner') {
+      if (onOpenSubscription) {
+        onOpenSubscription("کادرهای نئونی و فانتزی پیام‌ها");
+      }
+      return;
+    }
     setBubbleBorderFrame(frameId);
     try {
       const response = await fetch("/api/update-profile", {
@@ -493,7 +505,9 @@ export default function SettingsModal({
             {avatarUrl ? (
               <img 
                 src={avatarUrl} 
-                alt={nickname} 
+                alt={`تصویر آواتار حساب کاربری ${nickname} در پیام‌رسان پریوو`} 
+                loading="lazy"
+                decoding="async"
                 className="w-9 h-9 rounded-xl object-cover border border-slate-700 shadow-inner"
                 referrerPolicy="no-referrer"
               />
@@ -558,7 +572,9 @@ export default function SettingsModal({
               {avatarUrl ? (
                 <img 
                   src={avatarUrl} 
-                  alt={nickname} 
+                  alt={`تصویر آواتار حساب کاربری ${nickname} در پیام‌رسان پریوو`} 
+                  loading="lazy"
+                  decoding="async"
                   className="w-10 h-10 rounded-2xl object-cover border border-slate-700 shadow-inner"
                   referrerPolicy="no-referrer"
                 />
@@ -692,7 +708,9 @@ export default function SettingsModal({
                       <div className="relative group shrink-0">
                         <img 
                           src={avatarUrl} 
-                          alt="آواتار سفارشی" 
+                          alt="پیش‌نمایش تصویر آواتار انتخاب‌شده کاربر در پیام‌رسان پریوو" 
+                          loading="lazy"
+                          decoding="async"
                           className="w-16 h-16 rounded-2xl object-cover border border-slate-700 shadow-lg"
                           referrerPolicy="no-referrer"
                         />
@@ -1066,6 +1084,76 @@ export default function SettingsModal({
                         </button>
                       );
                     })}
+                  </div>
+                </div>
+
+                {/* LOW RAM / HIGH PERFORMANCE OPTIMIZATION MODE */}
+                <div className="border-t border-slate-800/80 pt-4 space-y-3 text-right">
+                  <div className="p-3.5 bg-slate-950 rounded-2xl border border-amber-500/30 flex items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Cpu className="w-4 h-4 text-amber-400 shrink-0" />
+                        <h4 className="text-xs font-bold text-amber-300">
+                          {appLanguage === 'en' ? 'Low RAM & GPU Mode' : 'حالت بهینه‌سازی رم و پردازنده (Low RAM Mode)'}
+                        </h4>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        {appLanguage === 'en'
+                          ? 'Disable heavy animations, blur filters, and limit memory buffer for ultra-fast performance on any device.'
+                          : 'غیرفعال‌سازی افکت‌های گرافیکی سنگین، بلر، و محدودسازی سقف حافظه پیام‌ها جهت اجرای روان در گوشی‌ها و رایانه‌های قدیمی'}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={onToggleLowRamMode}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1.5 border ${
+                        isLowRamMode
+                          ? "bg-amber-500 text-slate-950 border-amber-400 font-black shadow-md shadow-amber-500/20"
+                          : "bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800"
+                      }`}
+                    >
+                      <Cpu className="w-3.5 h-3.5" />
+                      <span>
+                        {isLowRamMode
+                          ? (appLanguage === 'en' ? 'Active (Low RAM)' : 'فعال (حالت کم‌مصرف)')
+                          : (appLanguage === 'en' ? 'Disabled' : 'غیرفعال')}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* LANGUAGE SELECTOR SYSTEM */}
+                  <div className="p-3.5 bg-slate-950 rounded-2xl border border-indigo-500/30 flex items-center justify-between gap-3 mt-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Globe className="w-4 h-4 text-indigo-400 shrink-0" />
+                        <h4 className="text-xs font-bold text-indigo-300">
+                          {appLanguage === 'en' ? 'Application Language / زبان برنامه' : 'زبان برنامه (Application Language)'}
+                        </h4>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        {appLanguage === 'en'
+                          ? 'Switch whole application interface language between Persian and English.'
+                          : 'تغییر کامل زبان رابط کاربری پیام‌رسان بین فارسی و انگلیسی'}
+                      </p>
+                    </div>
+
+                    <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-700 shrink-0 text-xs font-bold">
+                      <button
+                        type="button"
+                        onClick={() => onToggleLanguage && onToggleLanguage('fa')}
+                        className={`px-3 py-1.5 rounded-lg transition ${appLanguage === 'fa' ? 'bg-indigo-600 text-white font-black shadow-sm' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        فارسی
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onToggleLanguage && onToggleLanguage('en')}
+                        className={`px-3 py-1.5 rounded-lg transition ${appLanguage === 'en' ? 'bg-indigo-600 text-white font-black shadow-sm' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        English
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -6,20 +6,22 @@ interface GeminiLiveModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenChatTab?: () => void;
+  appLanguage?: 'fa' | 'en';
 }
 
 const VOICES = [
-  { id: "Zephyr", name: "زفیر (Zephyr - صمیمی و آرام)" },
-  { id: "Kore", name: "کوره (Kore - گرم و شمرده)" },
-  { id: "Puck", name: "پک (Puck - پرانرژی)" },
-  { id: "Fenrir", name: "فنریر (Fenrir - بم و جدی)" },
-  { id: "Charon", name: "کارون (Charon - متین)" },
+  { id: "Zephyr", name: "زفیر (Zephyr - صمیمی و آرام)", nameEn: "Zephyr (Friendly & Calm)" },
+  { id: "Kore", name: "کوره (Kore - گرم و شمرده)", nameEn: "Kore (Warm & Measured)" },
+  { id: "Puck", name: "پک (Puck - پرانرژی)", nameEn: "Puck (Energetic)" },
+  { id: "Fenrir", name: "فنریر (Fenrir - بم و جدی)", nameEn: "Fenrir (Deep & Serious)" },
+  { id: "Charon", name: "کارون (Charon - متین)", nameEn: "Charon (Balanced)" },
 ];
 
 export const GeminiLiveModal: React.FC<GeminiLiveModalProps> = ({
   isOpen,
   onClose,
-  onOpenChatTab
+  onOpenChatTab,
+  appLanguage = 'fa'
 }) => {
   const [status, setStatus] = useState<"disconnected" | "connecting" | "connected" | "speaking" | "error">("disconnected");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -272,7 +274,7 @@ export const GeminiLiveModal: React.FC<GeminiLiveModalProps> = ({
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md dir-rtl">
+      <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md ${appLanguage === 'fa' ? 'dir-rtl' : 'dir-ltr'}`} dir={appLanguage === 'fa' ? 'rtl' : 'ltr'}>
         <motion.div
           initial={{ opacity: 0, scale: 0.9, y: 20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -291,12 +293,14 @@ export const GeminiLiveModal: React.FC<GeminiLiveModalProps> = ({
               </div>
               <div>
                 <h3 className="text-sm font-black text-white flex items-center gap-1.5 font-sans">
-                  گفتگوی صوتی زنده با جمنای
+                  {appLanguage === 'en' ? 'Gemini Live Voice Chat' : 'گفتگوی صوتی زنده با جمنای'}
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 font-mono">
                     Live API
                   </span>
                 </h3>
-                <p className="text-[11px] text-slate-400 font-sans">دستیار هوشمند صوتی بدون تاخیر پرهام</p>
+                <p className="text-[11px] text-slate-400 font-sans">
+                  {appLanguage === 'en' ? 'Zero-latency smart voice assistant' : 'دستیار هوشمند صوتی بدون تاخیر پرهام'}
+                </p>
               </div>
             </div>
 

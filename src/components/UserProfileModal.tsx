@@ -1,9 +1,10 @@
 import React, { useState } from "react";
 import { 
   X, User, Lock, ShieldCheck, Crown, ShieldAlert, Ban, UserCheck, Phone, Video, 
-  Camera, Palette, Shield, Key, LogOut, Settings, Copy, Check, Sparkles, Smartphone, Terminal, RefreshCw, Upload, Eye, EyeOff
+  Camera, Palette, Shield, Key, LogOut, Settings, Copy, Check, Sparkles, Smartphone, Terminal, RefreshCw, Upload, Eye, EyeOff, Clock
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { formatLastSeen, Language } from "../utils/i18n";
 
 interface UserProfileModalProps {
   currentUser: any;
@@ -15,6 +16,8 @@ interface UserProfileModalProps {
   onOpenAdminDashboard?: () => void;
   onToggleFilter?: (targetUserId: string, filter: boolean) => void;
   onInitiateCall?: (type: 'audio' | 'video', user: any) => void;
+  onReportUser?: (targetUserId: string, reason: string) => void;
+  appLanguage?: Language;
 }
 
 export default function UserProfileModal({
@@ -26,7 +29,9 @@ export default function UserProfileModal({
   onLogout,
   onOpenAdminDashboard,
   onToggleFilter,
-  onInitiateCall
+  onInitiateCall,
+  onReportUser,
+  appLanguage = 'fa'
 }: UserProfileModalProps) {
   const targetUser = users[targetUserId] || (targetUserId === currentUser.id ? currentUser : null);
   const isSelf = currentUser?.id === targetUserId;
@@ -50,6 +55,11 @@ export default function UserProfileModal({
   const [isAppPasscodeEnabled, setIsAppPasscodeEnabled] = useState(currentUser?.isAppPasscodeEnabled === true);
   const [appPasscode, setAppPasscode] = useState(currentUser?.appPasscode || "");
   const [showPasscode, setShowPasscode] = useState(false);
+
+  // Report User State
+  const [showReportInput, setShowReportInput] = useState(false);
+  const [reportReasonText, setReportReasonText] = useState("");
+  const [reportSentMsg, setReportSentMsg] = useState("");
 
   if (!targetUser) {
     return (
@@ -268,14 +278,18 @@ export default function UserProfileModal({
             {isSelf && avatarUrl ? (
               <img
                 src={avatarUrl}
-                alt={nickname}
+                alt={`تصویر پروفایل ${nickname} در پیام‌رسان پریوو`}
+                loading="lazy"
+                decoding="async"
                 className="w-24 h-24 rounded-2xl object-cover border-4 border-slate-900 shadow-2xl"
                 referrerPolicy="no-referrer"
               />
             ) : targetUser.avatarUrl ? (
               <img
                 src={targetUser.avatarUrl}
-                alt={targetUser.nickname}
+                alt={`تصویر پروفایل ${targetUser.nickname} در پیام‌رسان پریوو`}
+                loading="lazy"
+                decoding="async"
                 className="w-24 h-24 rounded-2xl object-cover border-4 border-slate-900 shadow-2xl"
                 referrerPolicy="no-referrer"
               />
@@ -294,23 +308,89 @@ export default function UserProfileModal({
           </div>
 
           {/* Call / Action triggers if viewing another user */}
-          {!isSelf && onInitiateCall && (
-            <div className="flex items-center gap-2 mb-1">
-              <button
-                onClick={() => { onClose(); onInitiateCall('audio', targetUser); }}
-                className="px-3.5 py-2 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md"
-              >
-                <Phone className="w-3.5 h-3.5" />
-                <span>تماس صوتی</span>
-              </button>
-              <button
-                onClick={() => { onClose(); onInitiateCall('video', targetUser); }}
-                className="px-3.5 py-2 bg-teal-600/20 hover:bg-teal-600 border border-teal-500/30 hover:border-teal-500 text-teal-400 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md"
-              >
-                <Video className="w-3.5 h-3.5" />
-                <span>تصویری</span>
-              </button>
-            </div>
+          {!isSelf && (
+            isTargetOwner ? (
+              <div className="mb-1 px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[10px] font-bold rounded-xl flex items-center gap-1 shadow-sm">
+                <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>ارتباط پیوی و تماس با مالک غیرفعال است</span>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2 mb-1 w-full">
+                <div className="flex items-center gap-2">
+                  {onInitiateCall && (
+                    <>
+                      <button
+                        onClick={() => { onClose(); onInitiateCall('audio', targetUser); }}
+                        className="px-3.5 py-2 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md"
+                      >
+                        <Phone className="w-3.5 h-3.5" />
+                        <span>تماس صوتی</span>
+                      </button>
+                      <button
+                        onClick={() => { onClose(); onInitiateCall('video', targetUser); }}
+                        className="px-3.5 py-2 bg-teal-600/20 hover:bg-teal-600 border border-teal-500/30 hover:border-teal-500 text-teal-400 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md"
+                      >
+                        <Video className="w-3.5 h-3.5" />
+                        <span>تصویری</span>
+                      </button>
+                    </>
+                  )}
+                  {onReportUser && (
+                    <button
+                      onClick={() => setShowReportInput(!showReportInput)}
+                      className="px-3.5 py-2 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 hover:border-rose-500 text-rose-300 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md"
+                    >
+                      <ShieldAlert className="w-3.5 h-3.5" />
+                      <span>گزارش تخلف</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Report Reason Input Container */}
+                {showReportInput && (
+                  <div className="bg-rose-950/30 border border-rose-500/30 p-3 rounded-2xl space-y-2 mt-1">
+                    <p className="text-[11px] font-bold text-rose-300">ثبت گزارش تخلف برای ربات پشتیبانی:</p>
+                    <textarea
+                      rows={2}
+                      value={reportReasonText}
+                      onChange={(e) => setReportReasonText(e.target.value)}
+                      placeholder="علت گزارش تخلف یا فحاشی را بنویسید..."
+                      className="w-full p-2 bg-slate-950 border border-rose-900/50 rounded-xl text-xs text-white focus:outline-none focus:border-rose-500 resize-none custom-scrollbar"
+                    />
+                    {reportSentMsg && (
+                      <p className="text-[10px] text-emerald-400 font-bold bg-emerald-950/40 p-1.5 rounded-lg border border-emerald-900/40 text-center">
+                        {reportSentMsg}
+                      </p>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => setShowReportInput(false)}
+                        className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[10px] font-bold transition"
+                      >
+                        انصراف
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (onReportUser && reportReasonText.trim()) {
+                            onReportUser(targetUser.id, reportReasonText);
+                            setReportSentMsg("گزارش ارسال شد! هوش مصنوعی در حال بازرسی است.");
+                            setTimeout(() => {
+                              setShowReportInput(false);
+                              setReportSentMsg("");
+                              setReportReasonText("");
+                            }, 1800);
+                          }
+                        }}
+                        disabled={!reportReasonText.trim()}
+                        className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-[10px] font-bold transition disabled:opacity-50"
+                      >
+                        ارسال گزارش
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
           )}
 
           {/* Self Quick Actions */}
@@ -414,18 +494,23 @@ export default function UserProfileModal({
                 </div>
               </div>
 
-              {/* Status Indicator */}
-              <div className="p-3 bg-slate-950/40 border border-slate-800/60 rounded-2xl flex items-center justify-between text-xs">
-                <span className="text-slate-400 font-bold">وضعیت فعالیت:</span>
+              {/* Status Indicator & Last Seen */}
+              <div className="p-3 bg-slate-950/60 border border-slate-800/80 rounded-2xl flex items-center justify-between text-xs">
+                <span className="text-slate-400 font-bold flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>{appLanguage === 'en' ? 'Activity Status:' : 'وضعیت و آخرین بازدید:'}</span>
+                </span>
                 {targetUser.isFiltered ? (
-                  <span className="text-red-400 font-bold">مسدود توسط مدیریت</span>
+                  <span className="text-red-400 font-bold">{appLanguage === 'en' ? 'Banned by Admin' : 'مسدود توسط مدیریت'}</span>
                 ) : targetUser.isOnline ? (
                   <span className="text-emerald-400 font-bold flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    آنلاین در پیام‌رسان
+                    <span>{appLanguage === 'en' ? 'Online' : 'آنلاین در پیام‌رسان'}</span>
                   </span>
                 ) : (
-                  <span className="text-slate-400">آفلاین (آخرین بازدید اخیراً)</span>
+                  <span className="text-slate-300 font-medium">
+                    {formatLastSeen(targetUser.lastSeen, targetUser.privacyLastSeen, targetUser.isOnline, appLanguage)}
+                  </span>
                 )}
               </div>
 

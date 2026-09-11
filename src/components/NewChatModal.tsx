@@ -13,9 +13,10 @@ interface NewChatModalProps {
     avatarColor?: string;
     description?: string;
   }) => void;
+  appLanguage?: 'fa' | 'en';
 }
 
-export default function NewChatModal({ currentUser, users, onClose, onCreateChat }: NewChatModalProps) {
+export default function NewChatModal({ currentUser, users, onClose, onCreateChat, appLanguage = 'fa' }: NewChatModalProps) {
   const [chatType, setChatType] = useState<'direct' | 'group' | 'channel'>('direct');
   const [searchQuery, setSearchQuery] = useState("");
   const [chatName, setChatName] = useState("");
@@ -30,11 +31,26 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
   ];
   const emojis = ["🦊", "🦁", "🐼", "🦉", "🥷", "🧙", "🧑‍🚀", "👾", "🌟", "👑", "💬", "📢", "🚀", "💡"];
 
-  // Filter users based on search query (excluding current user)
+  // Filter users based on search query (excluding current user and owner for direct chat)
+  const isOwnerSearch = searchQuery.trim().toLowerCase().replace('@', '') === 'parham';
+  
   const availableUsers = Object.values(users).filter(u => {
-    if (u.id === currentUser.id) return false;
-    const q = searchQuery.toLowerCase();
-    return u.nickname.toLowerCase().includes(q) || u.username.toLowerCase().includes(q);
+    if (!u || u.id === currentUser.id) return false;
+    
+    // Disable direct chat with owner (parham) for non-owner users
+    const isTargetOwner = u.role === 'owner' || u.username?.toLowerCase() === 'parham' || u.id === 'usr_parham';
+    if (isTargetOwner && currentUser.role !== 'owner' && currentUser.username?.toLowerCase() !== 'parham') {
+      return false;
+    }
+
+    const q = searchQuery.trim().toLowerCase().replace('@', '');
+    if (!q) return false; // ID-based search required
+
+    const usernameMatch = u.username?.toLowerCase().includes(q);
+    const nicknameMatch = u.nickname?.toLowerCase().includes(q);
+    const idMatch = u.id?.toLowerCase().includes(q);
+
+    return usernameMatch || nicknameMatch || idMatch;
   });
 
   const toggleMember = (userId: string) => {
@@ -72,12 +88,40 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
     }
   };
 
+  const isCurrentUserOwner = currentUser?.role === 'owner' || currentUser?.username?.toLowerCase() === 'parham' || currentUser?.id === 'usr_parham';
+
+  if (isCurrentUserOwner) {
+    return (
+      <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm ${appLanguage === 'fa' ? 'dir-rtl' : 'dir-ltr'}`} dir={appLanguage === 'fa' ? 'rtl' : 'ltr'}>
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl p-6 text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center mx-auto text-xl">
+            🚫
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-sm font-extrabold text-white">امکان ایجاد چت برای مالک سیستم غیرفعال است</h3>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              به عنوان مالک سیستم (پرهام)، دسترسی به چت، ایجاد گفتگوی جدید یا ارسال پیام برای شما غیرفعال می‌باشد.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition"
+          >
+            بستن
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm dir-rtl" dir="rtl">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm ${appLanguage === 'fa' ? 'dir-rtl' : 'dir-ltr'}`} dir={appLanguage === 'fa' ? 'rtl' : 'ltr'}>
       <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col h-[520px]">
         {/* Header */}
         <div className="flex justify-between items-center p-4 border-b border-slate-800">
-          <h2 className="text-sm font-extrabold text-white">ایجاد گفتگوی جدید</h2>
+          <h2 className="text-sm font-extrabold text-white">
+            {appLanguage === 'en' ? 'Create New Chat' : 'ایجاد گفتگوی جدید'}
+          </h2>
           <button onClick={onClose} className="text-slate-500 hover:text-slate-300 p-1 hover:bg-slate-800 rounded-lg transition">
             <X className="w-4 h-4" />
           </button>
@@ -91,7 +135,7 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
             className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1.5 ${chatType === 'direct' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-300'}`}
           >
             <MessageSquare className="w-3.5 h-3.5" />
-            <span>چت خصوصی</span>
+            <span>{appLanguage === 'en' ? 'Direct Chat' : 'چت خصوصی'}</span>
           </button>
           <button
             type="button"
@@ -99,7 +143,7 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
             className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1.5 ${chatType === 'group' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-300'}`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>گروه خصوصی</span>
+            <span>{appLanguage === 'en' ? 'Private Group' : 'گروه خصوصی'}</span>
           </button>
           <button
             type="button"
@@ -107,7 +151,7 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
             className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1.5 ${chatType === 'channel' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-300'}`}
           >
             <Radio className="w-3.5 h-3.5" />
-            <span>کانال خصوصی</span>
+            <span>{appLanguage === 'en' ? 'Private Channel' : 'کانال خصوصی'}</span>
           </button>
         </div>
 
@@ -120,19 +164,25 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
                 <div className="grid grid-cols-3 gap-3">
                   <div className="col-span-2">
                     <label className="block text-[10px] font-bold text-slate-400 mb-1">
-                      {chatType === 'group' ? 'نام گروه' : 'نام کانال'}
+                      {chatType === 'group' 
+                        ? (appLanguage === 'en' ? 'Group Name' : 'نام گروه')
+                        : (appLanguage === 'en' ? 'Channel Name' : 'نام کانال')}
                     </label>
                     <input
                       type="text"
                       required
-                      placeholder={chatType === 'group' ? 'مثال: همکاران پروژه' : 'مثال: اخبار تکنولوژی'}
+                      placeholder={chatType === 'group' 
+                        ? (appLanguage === 'en' ? 'e.g. Project Team' : 'مثال: همکاران پروژه')
+                        : (appLanguage === 'en' ? 'e.g. Tech News' : 'مثال: اخبار تکنولوژی')}
                       value={chatName}
                       onChange={(e) => setChatName(e.target.value)}
                       className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-blue-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-400 mb-1">اموجی نمایه</label>
+                    <label className="block text-[10px] font-bold text-slate-400 mb-1">
+                      {appLanguage === 'en' ? 'Emoji' : 'اموجی نمایه'}
+                    </label>
                     <select
                       value={avatarEmoji}
                       onChange={(e) => setAvatarEmoji(e.target.value)}
@@ -144,10 +194,12 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">توضیحات کوتاه</label>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">
+                    {appLanguage === 'en' ? 'Short Description' : 'توضیحات کوتاه'}
+                  </label>
                   <input
                     type="text"
-                    placeholder="موضوع گفتگو..."
+                    placeholder={appLanguage === 'en' ? 'Chat topic...' : 'موضوع گفتگو...'}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-blue-500"
@@ -156,7 +208,9 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
 
                 {/* Theme colors */}
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">رنگ نمایه</label>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">
+                    {appLanguage === 'en' ? 'Theme Color' : 'رنگ نمایه'}
+                  </label>
                   <div className="flex gap-2">
                     {colors.map(col => (
                       <button
@@ -174,26 +228,35 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
             {/* 2. User Selector */}
             <div className="space-y-2">
               <label className="block text-[10px] font-bold text-slate-400">
-                {chatType === 'direct' ? 'انتخاب مخاطب چت' : 'انتخاب اعضا'}
+                {chatType === 'direct' 
+                  ? (appLanguage === 'en' ? 'Select Contact' : 'انتخاب مخاطب چت')
+                  : (appLanguage === 'en' ? 'Select Members' : 'انتخاب اعضا')}
               </label>
 
               {/* User search bar */}
               <div className="relative">
-                <span className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500">
+                <span className={`absolute inset-y-0 ${appLanguage === 'fa' ? 'right-0 pr-3' : 'left-0 pl-3'} flex items-center text-slate-500`}>
                   <Search className="w-3.5 h-3.5" />
                 </span>
                 <input
                   type="text"
-                  placeholder="جستجوی نام یا نام کاربری..."
+                  placeholder={appLanguage === 'en' ? 'Enter exact ID or @username...' : 'آیدی یا نام کاربری (@username) را وارد کنید...'}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pr-8 pl-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300 focus:outline-none"
+                  className={`w-full ${appLanguage === 'fa' ? 'pr-8 pl-3' : 'pl-8 pr-3'} py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300 focus:outline-none`}
                 />
               </div>
 
               {/* User List */}
               <div className="space-y-1 max-h-[160px] overflow-y-auto pr-0.5">
-                {availableUsers.length > 0 ? (
+                {isOwnerSearch ? (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-center space-y-1">
+                    <p className="text-xs font-bold text-amber-400">🚫 ارتباط مستقیم با مالک غیرفعال است</p>
+                    <p className="text-[10px] text-slate-400">
+                      جهت مطرح کردن مشکلات، گزارش‌ها یا سوالات خود لطفاً از **ربات پشتیبانی و گزارشات 🤖** استفاده نمایید.
+                    </p>
+                  </div>
+                ) : availableUsers.length > 0 ? (
                   availableUsers.map(u => {
                     const isSelected = selectedMembers.includes(u.id);
                     return (
@@ -207,7 +270,7 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
                             toggleMember(u.id);
                           }
                         }}
-                        className={`w-full text-right p-2 rounded-xl border transition flex items-center justify-between ${isSelected ? 'bg-blue-600/10 border-blue-500' : 'bg-slate-950/40 border-slate-800/50 hover:bg-slate-950'}`}
+                        className={`w-full text-start p-2 rounded-xl border transition flex items-center justify-between ${isSelected ? 'bg-blue-600/10 border-blue-500' : 'bg-slate-950/40 border-slate-800/50 hover:bg-slate-950'}`}
                       >
                         <div className="flex items-center gap-2">
                           <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-md ${u.avatarColor || 'bg-slate-800'}`}>
@@ -229,7 +292,9 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
                   })
                 ) : (
                   <div className="text-center py-4 text-slate-500 text-[10px]">
-                    هیچ کاربری یافت نشد. منتظر ثبت نام سایرین بمانید.
+                    {!searchQuery.trim()
+                      ? (appLanguage === 'en' ? 'Enter a user ID or @username to search.' : 'برای یافتن مخاطب، آیدی یا نام کاربری (@username) را وارد کنید.')
+                      : (appLanguage === 'en' ? 'No users found with this ID.' : 'کاربری با این آیدی یا نام کاربری پیدا نشد.')}
                   </div>
                 )}
               </div>
@@ -243,7 +308,7 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
               onClick={onClose}
               className="px-3.5 py-1.5 border border-slate-800 hover:bg-slate-800 text-slate-400 text-xs font-bold rounded-xl transition"
             >
-              انصراف
+              {appLanguage === 'en' ? 'Cancel' : 'انصراف'}
             </button>
             <button
               type="submit"
@@ -252,7 +317,11 @@ export default function NewChatModal({ currentUser, users, onClose, onCreateChat
             >
               <Plus className="w-4.5 h-4.5" />
               <span>
-                {chatType === 'direct' ? 'ایجاد گفتگو' : chatType === 'group' ? 'ساخت گروه خصوصی' : 'ساخت کانال خصوصی'}
+                {chatType === 'direct' 
+                  ? (appLanguage === 'en' ? 'Start Chat' : 'ایجاد گفتگو')
+                  : chatType === 'group' 
+                    ? (appLanguage === 'en' ? 'Create Group' : 'ساخت گروه خصوصی')
+                    : (appLanguage === 'en' ? 'Create Channel' : 'ساخت کانال خصوصی')}
               </span>
             </button>
           </div>

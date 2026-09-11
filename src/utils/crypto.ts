@@ -251,7 +251,11 @@ export async function decryptMessage(
     }
 
     const decKey = senderPublicKey || privateKey || 'default_fallback_key';
-    return FallbackCrypto.decrypt(rawCipher, decKey);
+    const finalAttempt = FallbackCrypto.decrypt(rawCipher, decKey);
+    if (isReadableText(finalAttempt) && !finalAttempt.includes('[خطا')) {
+      return finalAttempt;
+    }
+    return rawCipher;
   }
 
   if (cipherText.startsWith("ENC_RSA:")) {

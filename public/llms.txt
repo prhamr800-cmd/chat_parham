@@ -1,0 +1,19 @@
+# Privo — Secure E2EE Messenger
+
+> Privo is an advanced, ultra-secure end-to-end encrypted messaging web application featuring peer-to-peer audio/video calls, Google Gemini AI smart assistant, channels, and groups.
+
+## System Overview
+Privo provides privacy-first real-time communication. All messages are encrypted directly in the client browser with cryptographic keypairs before transit.
+
+## Main Capabilities
+- **End-to-End Cryptography**: Client-side public/private key encryption for zero-knowledge data security.
+- **Real-Time Messaging**: Ultra-low latency chat with typing status, delivery confirmations, reactions, and pinned messages.
+- **Voice & Video Calling**: Peer-to-peer WebRTC encrypted calls.
+- **AI Smart Assistant**: Integrated Gemini AI with multimodal Live API voice communication and smart chat features.
+- **Groups & Channels**: Scalable communication channels and private group chats.
+- **Account Security**: Two-Factor Authentication (TOTP 2FA), session management, and self-destructing message support.
+
+## Endpoints & APIs
+- **Web App**: https://server313.ir/
+- **Health Check**: `/api/health`
+- **Sitemap**: `https://server313.ir/sitemap.xml`

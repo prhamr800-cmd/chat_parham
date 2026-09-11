@@ -23,6 +23,7 @@ interface GroupProfileModalProps {
     aiAccessMode?: 'disabled' | 'summary_only' | 'full_participation';
   }) => void;
   onDeleteChat: (chatId: string) => void;
+  appLanguage?: 'fa' | 'en';
 }
 
 export default function GroupProfileModal({
@@ -33,7 +34,8 @@ export default function GroupProfileModal({
   onClose,
   onSelectMember,
   onUpdateChat,
-  onDeleteChat
+  onDeleteChat,
+  appLanguage = 'fa'
 }: GroupProfileModalProps) {
   const chat = chats.find(c => c.id === chatId);
 
@@ -181,8 +183,8 @@ export default function GroupProfileModal({
       initial="hidden"
       animate="visible"
       exit="exit"
-      className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4 dir-rtl" 
-      dir="rtl"
+      className={`fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4 ${appLanguage === 'fa' ? 'dir-rtl' : 'dir-ltr'}`} 
+      dir={appLanguage === 'fa' ? 'rtl' : 'ltr'}
     >
       {/* Dynamic Background Glow Elements */}
       <div className="absolute top-1/4 left-1/3 w-64 h-64 bg-indigo-500/10 rounded-full blur-[100px] pointer-events-none" />
@@ -335,7 +337,9 @@ export default function GroupProfileModal({
                             {member.avatarUrl ? (
                               <img
                                 src={member.avatarUrl}
-                                alt={member.nickname}
+                                alt={`تصویر عضو گروه: ${member.nickname} در پیام‌رسان پریوو`}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-9 h-9 rounded-xl object-cover ring-2 ring-slate-800 group-hover:ring-indigo-500/50 transition-all"
                                 referrerPolicy="no-referrer"
                               />

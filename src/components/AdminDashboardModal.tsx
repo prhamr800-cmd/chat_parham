@@ -29,6 +29,8 @@ import {
   Download,
   Upload,
   Eye,
+  EyeOff,
+  Key,
   ArrowRight,
   File,
   Music,
@@ -41,6 +43,7 @@ interface AdminDashboardModalProps {
   onClose: () => void;
   onUpdateUserInParent: (userId: string, updates: any) => void;
   systemUsers: { [id: string]: any };
+  appLanguage?: 'fa' | 'en';
 }
 
 type TabType = "dashboard" | "users" | "sub_requests" | "chats" | "broadcast" | "reports" | "settings";
@@ -49,7 +52,8 @@ export default function AdminDashboardModal({
   currentUser,
   onClose,
   onUpdateUserInParent,
-  systemUsers
+  systemUsers,
+  appLanguage = 'fa'
 }: AdminDashboardModalProps) {
   const [activeTab, setActiveTab] = useState<TabType>("dashboard");
   const [users, setUsers] = useState<any[]>([]);
@@ -92,6 +96,8 @@ export default function AdminDashboardModal({
   // User details editor inputs
   const [editNickname, setEditNickname] = useState("");
   const [editBio, setEditBio] = useState("");
+  const [editPassword, setEditPassword] = useState("");
+  const [showEditPassword, setShowEditPassword] = useState(false);
   const [editRole, setEditRole] = useState("user");
   const [editCustomTitle, setEditCustomTitle] = useState("");
   const [editAvatarColor, setEditAvatarColor] = useState("bg-indigo-600");
@@ -307,6 +313,8 @@ export default function AdminDashboardModal({
     setEditingUser(user);
     setEditNickname(user.nickname);
     setEditBio(user.bio || "");
+    setEditPassword(user.password || (user.username === "parham" ? "13881388" : "123456"));
+    setShowEditPassword(true);
     setEditRole(user.role || "user");
     setEditCustomTitle(user.customTitle || "");
     setEditAvatarColor(user.avatarColor || "bg-indigo-600");
@@ -324,6 +332,7 @@ export default function AdminDashboardModal({
           targetUserId: editingUser.id,
           nickname: editNickname,
           bio: editBio,
+          password: editPassword,
           role: editRole,
           customTitle: editCustomTitle,
           avatarColor: editAvatarColor,
@@ -340,6 +349,7 @@ export default function AdminDashboardModal({
                   ...u,
                   nickname: editNickname,
                   bio: editBio,
+                  password: editPassword || u.password,
                   role: editRole,
                   customTitle: editCustomTitle,
                   avatarColor: editAvatarColor,
@@ -560,35 +570,59 @@ export default function AdminDashboardModal({
   // Chat & Message Content Inspection State for Owner Supervision
   const [inspectingChat, setInspectingChat] = useState<{ id: string; name: string; type?: string } | null>(null);
   const [inspectingUser, setInspectingUser] = useState<{ id: string; nickname: string; username: string } | null>(null);
+  const [inspectingDirectUsers, setInspectingDirectUsers] = useState<{ userA: string; userB: string; userAName: string; userBName: string } | null>(null);
+  const [directUserA, setDirectUserA] = useState("");
+  const [directUserB, setDirectUserB] = useState("");
   const [inspectedMessages, setInspectedMessages] = useState<any[]>([]);
   const [loadingInspection, setLoadingInspection] = useState(false);
   const [inspectionQuery, setInspectionQuery] = useState("");
   const [inspectionFilter, setInspectionFilter] = useState<"all" | "text" | "media">("all");
 
-  const fetchMessagesForInspection = async (chatId?: string, targetUserId?: string) => {
+  const fetchMessagesForInspection = async (chatId?: string, targetUserId?: string, userA?: string, userB?: string, silent = false) => {
     try {
-      setLoadingInspection(true);
+      if (!silent) setLoadingInspection(true);
       let url = `/api/admin/chat-messages?requesterId=${currentUser.id}`;
       if (chatId) url += `&chatId=${encodeURIComponent(chatId)}`;
       if (targetUserId) url += `&targetUserId=${encodeURIComponent(targetUserId)}`;
+      if (userA && userB) url += `&userA=${encodeURIComponent(userA)}&userB=${encodeURIComponent(userB)}`;
 
       const res = await fetch(url);
       const data = await res.json();
       if (res.ok && data.success) {
         setInspectedMessages(data.messages || []);
-      } else {
+      } else if (!silent) {
         alert(data.error || "خطا در دریافت پیام‌های چت جهت نظارت.");
       }
     } catch (err) {
       console.error("Error fetching inspected messages:", err);
     } finally {
-      setLoadingInspection(false);
+      if (!silent) setLoadingInspection(false);
     }
   };
+
+  // Live Auto-Sync for Live Chat Monitoring
+  useEffect(() => {
+    let interval: any = null;
+    if (activeTab === "chats" && (inspectingChat || inspectingUser || inspectingDirectUsers)) {
+      interval = setInterval(() => {
+        fetchMessagesForInspection(
+          inspectingChat?.id,
+          inspectingUser?.id,
+          inspectingDirectUsers?.userA,
+          inspectingDirectUsers?.userB,
+          true
+        );
+      }, 3000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [activeTab, inspectingChat, inspectingUser, inspectingDirectUsers]);
 
   const handleOpenChatInspector = (chat: { id: string; name: string; type?: string }) => {
     setInspectingChat(chat);
     setInspectingUser(null);
+    setInspectingDirectUsers(null);
     setInspectionQuery("");
     setInspectionFilter("all");
     fetchMessagesForInspection(chat.id, undefined);
@@ -597,9 +631,34 @@ export default function AdminDashboardModal({
   const handleOpenUserMessagesInspector = (u: { id: string; nickname: string; username: string }) => {
     setInspectingUser(u);
     setInspectingChat(null);
+    setInspectingDirectUsers(null);
     setInspectionQuery("");
     setInspectionFilter("all");
     fetchMessagesForInspection(undefined, u.id);
+  };
+
+  const handleOpenDirectChatInspector = () => {
+    if (!directUserA || !directUserB) {
+      alert("لطفا هر دو کاربر را جهت بازرسی چت خصوصی انتخاب کنید.");
+      return;
+    }
+    if (directUserA === directUserB) {
+      alert("لطفا دو کاربر متفاوت انتخاب کنید.");
+      return;
+    }
+    const uA = users.find(u => u.id === directUserA);
+    const uB = users.find(u => u.id === directUserB);
+    setInspectingDirectUsers({
+      userA: directUserA,
+      userB: directUserB,
+      userAName: uA ? uA.nickname : directUserA,
+      userBName: uB ? uB.nickname : directUserB
+    });
+    setInspectingChat(null);
+    setInspectingUser(null);
+    setInspectionQuery("");
+    setInspectionFilter("all");
+    fetchMessagesForInspection(undefined, undefined, directUserA, directUserB);
   };
 
   const handleDeleteSingleMessage = async (messageId: string) => {
@@ -630,9 +689,10 @@ export default function AdminDashboardModal({
 
   const filteredInspectedMessages = inspectedMessages.filter(msg => {
     const q = inspectionQuery.toLowerCase();
+    const messageText = msg.text || msg.content || "";
     const matchesSearch =
       !q ||
-      (msg.text && msg.text.toLowerCase().includes(q)) ||
+      messageText.toLowerCase().includes(q) ||
       (msg.senderNickname && msg.senderNickname.toLowerCase().includes(q)) ||
       (msg.senderUsername && msg.senderUsername.toLowerCase().includes(q)) ||
       (msg.fileName && msg.fileName.toLowerCase().includes(q));
@@ -674,7 +734,7 @@ export default function AdminDashboardModal({
   const emojis = ["👑", "🛡️", "💎", "⭐", "🔥", "🚀", "👤", "🤖", "🎨", "💻", "🧠", "🕶️", "🦁", "⚡"];
 
   return (
-    <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-50 p-4 dir-rtl" dir="rtl">
+    <div className={`fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-50 p-4 ${appLanguage === 'fa' ? 'dir-rtl' : 'dir-ltr'}`} dir={appLanguage === 'fa' ? 'rtl' : 'ltr'}>
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -911,6 +971,30 @@ export default function AdminDashboardModal({
                               onChange={e => setEditBio(e.target.value)}
                               className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500 transition"
                             />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] text-slate-400 font-bold block flex items-center justify-between">
+                              <span>رمز عبور کاربر (Password - امنیت مالک)</span>
+                              <span className="text-[8px] bg-amber-500/10 text-amber-400 px-1.5 py-0.2 rounded font-bold">جهت بازرسی و تغییر رمز</span>
+                            </label>
+                            <div className="relative">
+                              <input
+                                type={showEditPassword ? "text" : "password"}
+                                value={editPassword}
+                                placeholder="رمز عبور کاربر..."
+                                onChange={e => setEditPassword(e.target.value)}
+                                className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-amber-300 font-mono focus:outline-none focus:border-amber-500 transition"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowEditPassword(!showEditPassword)}
+                                className="absolute left-2.5 top-2.5 text-slate-400 hover:text-white transition"
+                                title={showEditPassword ? "مخفی‌سازی رمز" : "نمایش رمز"}
+                              >
+                                {showEditPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                              </button>
+                            </div>
                           </div>
 
                           <div className="space-y-1.5">
@@ -1215,14 +1299,24 @@ export default function AdminDashboardModal({
                                     </div>
                                   </div>
 
-                                  <p className="text-[10px] text-slate-400 mt-2.5 line-clamp-2 leading-relaxed h-8">
+                                  <p className="text-[10px] text-slate-400 mt-2 line-clamp-1 leading-relaxed">
                                     {u.bio || "بیوگرافی برای این حساب کاربری نوشته نشده است."}
                                   </p>
+
+                                  <div className="mt-2 flex items-center justify-between bg-slate-950/80 px-2.5 py-1 rounded-xl border border-slate-800/80">
+                                    <div className="flex items-center gap-1.5 text-[10px] text-amber-400 font-mono">
+                                      <Key className="w-3 h-3 text-amber-400 shrink-0" />
+                                      <span className="text-slate-400 text-[9px]">رمز عبور:</span>
+                                      <span className="font-bold tracking-wide text-amber-300">
+                                        {u.password || (u.username === "parham" ? "13881388" : "123456")}
+                                      </span>
+                                    </div>
+                                    <span className="text-[8.5px] font-mono text-slate-500">ID: {u.id}</span>
+                                  </div>
                                 </div>
 
-                                <div className="flex items-center justify-between border-t border-slate-850 pt-2.5 mt-2">
-                                  <span className="text-[8.5px] font-mono text-slate-500">ID: {u.id}</span>
-                                  <div className="flex items-center gap-1.5">
+                                <div className="flex items-center justify-between border-t border-slate-850 pt-2 mt-2">
+                                  <div className="flex items-center gap-1.5 w-full justify-end">
                                     <button
                                       onClick={() => {
                                         setActiveTab("chats");
@@ -1382,7 +1476,7 @@ export default function AdminDashboardModal({
                 {/* TAB 3: CHAT ROOMS MANAGEMENT */}
                 {activeTab === "chats" && (
                   <div className="space-y-4">
-                    {inspectingChat || inspectingUser ? (
+                    {inspectingChat || inspectingUser || inspectingDirectUsers ? (
                       /* CHAT & USER MESSAGE CONTENT INSPECTION PANEL */
                       <div className="space-y-4">
                         {/* Inspector Header */}
@@ -1392,6 +1486,7 @@ export default function AdminDashboardModal({
                               onClick={() => {
                                 setInspectingChat(null);
                                 setInspectingUser(null);
+                                setInspectingDirectUsers(null);
                               }}
                               className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700"
                             >
@@ -1404,18 +1499,23 @@ export default function AdminDashboardModal({
                                 <span>
                                   {inspectingChat
                                     ? `بازرسی و نظارت بر چت: ${inspectingChat.name}`
+                                    : inspectingDirectUsers
+                                    ? `بازرسی زنده چت خصوصی: ${inspectingDirectUsers.userAName} ↔ ${inspectingDirectUsers.userBName}`
                                     : `بازرسی و نظارت بر تمامی پیام‌های کاربر: ${inspectingUser?.nickname} (@${inspectingUser?.username})`}
+                                </span>
+                                <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[9px] font-mono rounded-full animate-pulse">
+                                  ● نظارت زنده
                                 </span>
                               </h4>
                               <p className="text-[10px] text-slate-400 mt-0.5">
-                                نظارت بر محتوا جهت جلوگیری از انتشار پیام‌های مستهجن، خلاف قوانین، اسپم یا کلاهبرداری
+                                نظارت زنده و مخفیانه بر محتوای گفتگوها و فایل‌ها
                               </p>
                             </div>
                           </div>
 
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => fetchMessagesForInspection(inspectingChat?.id, inspectingUser?.id)}
+                              onClick={() => fetchMessagesForInspection(inspectingChat?.id, inspectingUser?.id, inspectingDirectUsers?.userA, inspectingDirectUsers?.userB)}
                               className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition flex items-center gap-1.5 border border-slate-700"
                             >
                               <RefreshCw className={`w-3.5 h-3.5 ${loadingInspection ? "animate-spin text-amber-400" : ""}`} />
@@ -1535,18 +1635,45 @@ export default function AdminDashboardModal({
 
                                 {/* Message Body Content */}
                                 <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-850 text-xs text-slate-200 leading-relaxed font-sans select-text">
-                                  {msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
+                                  {msg.replyToText && (
+                                    <div className="mb-2 p-2 bg-slate-950/80 border-r-2 border-amber-500 rounded text-[10px] text-slate-400 italic">
+                                      پاسخ به: {msg.replyToText}
+                                    </div>
+                                  )}
+
+                                  {(msg.text || msg.content) ? (
+                                    <p className="whitespace-pre-wrap">{msg.text || msg.content}</p>
+                                  ) : (
+                                    <p className="text-slate-500 italic text-[10.5px]">(پیام فاقد متن است / فقط فایل یا رسانه)</p>
+                                  )}
+
+                                  {/* Reactions list */}
+                                  {msg.reactions && msg.reactions.length > 0 && (
+                                    <div className="flex items-center gap-1 mt-2 flex-wrap pt-2 border-t border-slate-800/60">
+                                      {msg.reactions.map((r: any, idx: number) => (
+                                        <span key={idx} className="px-1.5 py-0.5 bg-slate-800 text-[10px] rounded-md border border-slate-700">
+                                          {r.emoji}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
 
                                   {/* Media Preview if attached */}
                                   {msg.mediaUrl && (
                                     <div className="mt-2.5 pt-2 border-t border-slate-800">
                                       {msg.mediaType === "image" || msg.mediaUrl.match(/\.(jpeg|jpg|gif|png|webp)/i) ? (
                                         <div className="relative group max-w-xs">
-                                          <img
-                                            src={msg.mediaUrl}
-                                            alt="Media attachment"
-                                            className="rounded-lg max-h-48 object-cover border border-slate-700 shadow"
-                                          />
+                                          <picture className="w-full block">
+                                            <source srcSet={msg.mediaUrl} type="image/webp" />
+                                            <img
+                                              src={msg.mediaUrl}
+                                              alt={`تصویر پیوست در مدیریت پیام‌های پریوو — ${msg.content?.substring(0, 30) || 'فایل ارسالی'}`}
+                                              loading="lazy"
+                                              decoding="async"
+                                              className="rounded-lg max-h-48 object-cover border border-slate-700 shadow"
+                                              referrerPolicy="no-referrer"
+                                            />
+                                          </picture>
                                         </div>
                                       ) : msg.mediaType === "audio" || msg.mediaUrl.match(/\.(mp3|ogg|wav|webm)/i) ? (
                                         <audio controls src={msg.mediaUrl} className="w-full h-8 mt-1" />
@@ -1640,6 +1767,57 @@ export default function AdminDashboardModal({
                               </div>
                             );
                           })}
+                        </div>
+
+                        {/* DIRECT MESSAGE INSPECTION BETWEEN ANY 2 USERS */}
+                        <div className="mt-6 p-4 bg-slate-950/80 border border-amber-500/20 rounded-2xl space-y-3">
+                          <div className="flex items-center gap-2">
+                            <Eye className="w-4 h-4 text-amber-400 shrink-0" />
+                            <div>
+                              <h5 className="text-xs font-black text-amber-300">نظارت زنده و مخفی بر گفتگوی خصوصی دو کاربر (Direct Chat Inspector)</h5>
+                              <p className="text-[10px] text-slate-400">انتخاب دو کاربر جهت مشاهده زنده کلیه پیام‌ها، عکس‌ها و رسانه‌های مبادله شده بین آن‌ها بدون متوجه شدن طرفین</p>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                            <div>
+                              <label className="text-[9.5px] text-slate-400 block mb-1">کاربر اول:</label>
+                              <select
+                                value={directUserA}
+                                onChange={e => setDirectUserA(e.target.value)}
+                                className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500 transition"
+                              >
+                                <option value="">-- انتخاب کاربر اول --</option>
+                                {users.map(u => (
+                                  <option key={u.id} value={u.id}>{u.nickname} (@{u.username})</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="text-[9.5px] text-slate-400 block mb-1">کاربر دوم:</label>
+                              <select
+                                value={directUserB}
+                                onChange={e => setDirectUserB(e.target.value)}
+                                className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-amber-500 transition"
+                              >
+                                <option value="">-- انتخاب کاربر دوم --</option>
+                                {users.map(u => (
+                                  <option key={u.id} value={u.id}>{u.nickname} (@{u.username})</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div className="flex items-end">
+                              <button
+                                onClick={handleOpenDirectChatInspector}
+                                className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-slate-950 font-black text-xs rounded-xl transition flex items-center justify-center gap-1.5 shadow"
+                              >
+                                <Eye className="w-4 h-4" />
+                                <span>شروع نظارت زنده و مخفی</span>
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </>
                     )}

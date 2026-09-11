@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { 
-  Search, Settings, Send, Paperclip, Mic, Square, Play, Pause, Smile, 
-  MoreVertical, ShieldCheck, Check, CheckCheck, Users, Radio, Download, 
-  FileText, Volume2, HelpCircle, AlertCircle, Sparkles, SmilePlus, Ban, Lock, Unlock, ChevronUp, Filter, RefreshCw,
+  Search, Settings, Send, Paperclip, Mic, Square, Play, Pause, Smile, Film,
+  MoreVertical, ShieldCheck, Check, CheckCheck, CheckCircle2, Users, Radio, Download, 
+  FileText, Volume2, VolumeX, UserX, Cpu, Eye, HelpCircle, AlertCircle, Sparkles, SmilePlus, Ban, Lock, Unlock, ChevronUp, Filter, RefreshCw,
   ArrowRight, BarChart2, X, Pin, Languages, Globe, CornerUpLeft, Image as ImageIcon, ShieldAlert, Crown,
-  Phone, PhoneOff, Camera, CameraOff, MicOff, Video,
+  Phone, PhoneOff, Camera, CameraOff, MicOff, Video, Brain, Zap,
   Copy, Plus, Trash2, Menu, Maximize2, Minimize2, GripVertical, Code
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -16,11 +16,16 @@ import GroupProfileModal from "./components/GroupProfileModal";
 import AdminDashboardModal from "./components/AdminDashboardModal";
 import SubscriptionModal from "./components/SubscriptionModal";
 import EmojiPicker from "./components/EmojiPicker";
+import GifPickerModal from "./components/GifPickerModal";
 import MusicPlayer from "./components/MusicPlayer";
 import GeminiLiveModal from "./components/GeminiLiveModal";
+import { PrivoLogo } from "./components/PrivoLogo";
 import { encryptMessage, decryptMessage } from "./utils/crypto";
 import { themes } from "./utils/theme";
 import { User, Message, Chat, OutgoingQueueItem } from "./types";
+import { formatLastSeen, Language, translations } from "./utils/i18n";
+import { optimizeImageToWebP, generateDescriptiveImageAlt } from "./utils/imageOptimizer";
+import { LiveKitCallSession } from "./utils/livekitService";
 
 interface CodeBoxProps {
   code: string;
@@ -247,6 +252,109 @@ export default function App() {
   }, [activeChatId]);
   const [typingUsers, setTypingUsers] = useState<{ [chatId: string]: { [userId: string]: string } }>({});
 
+  // Pinned & Muted chats state
+  const [pinnedChatIds, setPinnedChatIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("parham_pinned_chats") || "[]");
+    } catch { return []; }
+  });
+  const [mutedChatIds, setMutedChatIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("parham_muted_chats") || "[]");
+    } catch { return []; }
+  });
+
+  // Low RAM / High Performance Mode state
+  const [isLowRamMode, setIsLowRamMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("parham_low_ram_mode") === "true";
+    } catch { return false; }
+  });
+
+  // Global Language state ('fa' | 'en')
+  const [appLanguage, setAppLanguage] = useState<Language>(() => {
+    try {
+      return (localStorage.getItem("parham_app_language") as Language) || "fa";
+    } catch { return "fa"; }
+  });
+
+  const toggleLanguage = (lang: Language) => {
+    setAppLanguage(lang);
+    localStorage.setItem("parham_app_language", lang);
+    document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
+  };
+
+  useEffect(() => {
+    document.documentElement.dir = appLanguage === 'fa' ? 'rtl' : 'ltr';
+  }, [appLanguage]);
+
+  // Saved Drafts state per chatId
+  const [drafts, setDrafts] = useState<{ [chatId: string]: string }>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("parham_chat_drafts") || "{}");
+    } catch { return {}; }
+  });
+
+  useEffect(() => {
+    if (isLowRamMode) {
+      document.documentElement.classList.add("low-ram-mode");
+    } else {
+      document.documentElement.classList.remove("low-ram-mode");
+    }
+  }, [isLowRamMode]);
+
+  const [messagesDisplayLimit, setMessagesDisplayLimit] = useState<number>(60);
+
+  // Context Menu state for Sidebar Chat List
+  const [selectedChatForMenu, setSelectedChatForMenu] = useState<Chat | null>(null);
+  const [chatContextMenuPos, setChatContextMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const longPressTimerRef = useRef<any>(null);
+
+  const togglePinChat = (chatId: string) => {
+    setPinnedChatIds(prev => {
+      const next = prev.includes(chatId) ? prev.filter(id => id !== chatId) : [...prev, chatId];
+      localStorage.setItem("parham_pinned_chats", JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const toggleMuteChat = (chatId: string) => {
+    setMutedChatIds(prev => {
+      const next = prev.includes(chatId) ? prev.filter(id => id !== chatId) : [...prev, chatId];
+      localStorage.setItem("parham_muted_chats", JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const toggleLowRamMode = () => {
+    setIsLowRamMode(prev => {
+      const next = !prev;
+      localStorage.setItem("parham_low_ram_mode", String(next));
+      return next;
+    });
+  };
+
+  const handleToggleBlockFromMenu = async (targetUserId: string) => {
+    if (!currentUser) return;
+    const isCurrentlyBlocked = currentUser.blockedUsers?.includes(targetUserId);
+    const endpoint = isCurrentlyBlocked ? "/api/unblock-user" : "/api/block-user";
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUser.id, blockId: targetUserId })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setCurrentUser(prev => prev ? ({ ...prev, blockedUsers: data.user.blockedUsers || [] }) : prev);
+      } else {
+        alert(data.error || "خطا در تغییر وضعیت مسدودسازی کاربر.");
+      }
+    } catch (e) {
+      console.error("Block toggle error:", e);
+    }
+  };
+
   // Profiles, Subscription and Administration Dashboard states
   const [selectedProfileUserId, setSelectedProfileUserId] = useState<string | null>(null);
   const [selectedProfileGroupId, setSelectedProfileGroupId] = useState<string | null>(null);
@@ -401,6 +509,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showNewChat, setShowNewChat] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [lightboxName, setLightboxName] = useState<string>("");
 
@@ -415,8 +524,12 @@ export default function App() {
   const [partnerIsMuted, setPartnerIsMuted] = useState(false);
   const [partnerIsCameraOff, setPartnerIsCameraOff] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
+  const [livekitConnected, setLivekitConnected] = useState(false);
+  const [hasLiveKitVideo, setHasLiveKitVideo] = useState(false);
 
   // Call-related Refs
+  const livekitSessionRef = useRef<LiveKitCallSession | null>(null);
+  const currentCallRoomRef = useRef<string | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const callTimerRef = useRef<any>(null);
@@ -431,6 +544,13 @@ export default function App() {
       remoteVideoRef.current.srcObject = remoteStream;
       remoteVideoRef.current.play().catch(e => console.warn("Remote video play error", e));
     }
+    if (callState !== 'idle' && livekitSessionRef.current) {
+      livekitSessionRef.current.setVideoElements(
+        remoteVideoRef.current,
+        localVideoRef.current,
+        remoteAudioRef.current
+      );
+    }
   }, [remoteStream, callState, callType]);
 
   useEffect(() => {
@@ -438,12 +558,26 @@ export default function App() {
       remoteAudioRef.current.srcObject = remoteStream;
       remoteAudioRef.current.play().catch(e => console.warn("Remote audio play error", e));
     }
+    if (callState !== 'idle' && livekitSessionRef.current) {
+      livekitSessionRef.current.setVideoElements(
+        remoteVideoRef.current,
+        localVideoRef.current,
+        remoteAudioRef.current
+      );
+    }
   }, [remoteStream, callState]);
 
   useEffect(() => {
     if (localVideoRef.current && localStream) {
       localVideoRef.current.srcObject = localStream;
       localVideoRef.current.play().catch(e => console.warn("Local video play error", e));
+    }
+    if (callState !== 'idle' && livekitSessionRef.current) {
+      livekitSessionRef.current.setVideoElements(
+        remoteVideoRef.current,
+        localVideoRef.current,
+        remoteAudioRef.current
+      );
     }
   }, [localStream, callState, callType]);
 
@@ -502,6 +636,8 @@ export default function App() {
   const [aiAnalysis, setAiAnalysis] = useState<string>("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiChatInput, setAiChatInput] = useState("");
+  const [aiChatMode, setAiChatMode] = useState<"fast" | "reasoning" | "vision_video">("fast");
+  const [aiChatMedia, setAiChatMedia] = useState<Array<{ data: string; mimeType: string; name: string }>>([]);
   const [aiChatHistory, setAiChatHistory] = useState<{ role: "user" | "model"; content: string }[]>([]);
   const [isAiTyping, setIsAiTyping] = useState(false);
 
@@ -743,7 +879,11 @@ export default function App() {
   const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false);
   const lastSuggestedMsgId = useRef<string>("");
 
-  // Advanced messaging states
+  // Message multi-selection & bulk operation states
+  const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
+  const [bulkDeleteModalOpen, setBulkDeleteModalOpen] = useState(false);
+  const [bulkForwardModalOpen, setBulkForwardModalOpen] = useState(false);
+  const [deleteChatModalTarget, setDeleteChatModalTarget] = useState<Chat | null>(null);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
@@ -775,12 +915,23 @@ export default function App() {
       const imgMatch = cleanLine.match(/!\[(.*?)\]\((.*?)\)/);
       if (imgMatch) {
         const altText = imgMatch[1] || "تصویر هوش مصنوعی";
+        const descriptiveAlt = `تصویر تولید شده با هوش مصنوعی پریوو: ${altText} — Privo AI Messenger`;
         const imgSrc = imgMatch[2];
         return (
           <div key={i} className="my-2 p-2 bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden group relative">
-            <img src={imgSrc} alt={altText} className="w-full h-auto max-h-64 object-cover rounded-xl" referrerPolicy="no-referrer" />
+            <picture className="w-full block">
+              <source srcSet={imgSrc} type="image/webp" />
+              <img 
+                src={imgSrc} 
+                alt={descriptiveAlt} 
+                loading="lazy" 
+                decoding="async" 
+                className="w-full h-auto max-h-64 object-cover rounded-xl" 
+                referrerPolicy="no-referrer" 
+              />
+            </picture>
             <div className="mt-2 flex items-center justify-between gap-1.5 pt-1.5 border-t border-slate-900">
-              <a href={imgSrc} download="ai-generated.jpg" target="_blank" rel="noreferrer" className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-[9px] font-bold text-slate-300 rounded-lg border border-slate-800 flex items-center gap-1 transition">
+              <a href={imgSrc} download="ai-generated.webp" target="_blank" rel="noreferrer" className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-[9px] font-bold text-slate-300 rounded-lg border border-slate-800 flex items-center gap-1 transition">
                 <Download className="w-3 h-3 text-sky-400" />
                 <span>ذخیره</span>
               </a>
@@ -876,6 +1027,16 @@ export default function App() {
       return;
     }
 
+    if (currentUser?.subscriptionTier !== 'plus' && currentUser?.role !== 'owner') {
+      const todayKey = `analyze_count_${new Date().toISOString().slice(0, 10)}`;
+      const count = parseInt(localStorage.getItem(todayKey) || "0");
+      if (count >= 1) {
+        openSubscriptionForFeature("تحلیل نامحدود گفتگوها با AI");
+        return;
+      }
+      localStorage.setItem(todayKey, (count + 1).toString());
+    }
+
     setIsAnalyzing(true);
     setAiAnalysis("");
 
@@ -910,10 +1071,34 @@ export default function App() {
 
   const handleAiChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!aiChatInput.trim()) return;
+    if (!aiChatInput.trim() && aiChatMedia.length === 0) return;
 
-    const userMessage = aiChatInput.trim();
+    // Check mode & media restrictions for free users
+    if (aiChatMode === 'reasoning' && currentUser?.subscriptionTier !== 'plus' && currentUser?.role !== 'owner') {
+      openSubscriptionForFeature("تفکر بالا و استدلال عمیق (Reasoning Mode)");
+      return;
+    }
+
+    if ((aiChatMode === 'vision_video' || aiChatMedia.length > 0) && currentUser?.subscriptionTier !== 'plus' && currentUser?.role !== 'owner') {
+      openSubscriptionForFeature("پردازش تصویر و ویدیو با AI");
+      return;
+    }
+
+    // Check daily fast chat quota for free users
+    if (currentUser?.subscriptionTier !== 'plus' && currentUser?.role !== 'owner') {
+      const todayKey = `ai_chat_count_${new Date().toISOString().slice(0, 10)}`;
+      const count = parseInt(localStorage.getItem(todayKey) || "0");
+      if (count >= 10) {
+        openSubscriptionForFeature("چت نامحدود با هوش مصنوعی");
+        return;
+      }
+      localStorage.setItem(todayKey, (count + 1).toString());
+    }
+
+    const userMessage = aiChatInput.trim() || (aiChatMedia.length > 0 ? "فایل‌های پیوست شده را تحلیل کن." : "");
     setAiChatInput("");
+    const mediaToSend = [...aiChatMedia];
+    setAiChatMedia([]);
 
     const updatedHistory = [...aiChatHistory, { role: "user" as const, content: userMessage }];
     setAiChatHistory(updatedHistory);
@@ -930,7 +1115,10 @@ export default function App() {
         },
         body: JSON.stringify({
           messages: updatedHistory,
-          context: contextText
+          context: contextText,
+          mode: aiChatMode,
+          media: mediaToSend,
+          userId: currentUser?.id
         })
       });
 
@@ -1303,6 +1491,14 @@ export default function App() {
     stopRingtone();
     playRingtone('end');
 
+    if (livekitSessionRef.current) {
+      livekitSessionRef.current.leave().catch(e => console.warn("LiveKit leave error", e));
+      livekitSessionRef.current = null;
+    }
+    setLivekitConnected(false);
+    setHasLiveKitVideo(false);
+    currentCallRoomRef.current = null;
+
     if ('speechSynthesis' in window) {
       try { window.speechSynthesis.cancel(); } catch (e) {}
     }
@@ -1336,6 +1532,85 @@ export default function App() {
     setCallState('idle');
     setCallPartner(null);
   };
+
+  // Helper to establish connection to LiveKit Cloud Room
+  const connectLiveKitRoom = async (roomName: string, callTypeToUse: 'audio' | 'video') => {
+    if (!currentUser) return;
+    try {
+      if (livekitSessionRef.current) {
+        await livekitSessionRef.current.leave();
+      }
+
+      const session = new LiveKitCallSession({
+        onRemoteVideoTrack: () => {
+          setHasLiveKitVideo(true);
+        },
+        onRemoteAudioTrack: () => {},
+        onLocalVideoTrack: () => {},
+        onPartnerMuteChange: (isPartnerMuted, isPartnerCameraOff) => {
+          setPartnerIsMuted(isPartnerMuted);
+          setPartnerIsCameraOff(isPartnerCameraOff);
+        },
+        onConnectionStatusChange: (status) => {
+          if (status === 'connected') {
+            setLivekitConnected(true);
+          } else if (status === 'disconnected') {
+            setLivekitConnected(false);
+          }
+        },
+        onParticipantDisconnected: () => {
+          endCallLocal();
+        },
+        onError: (err) => {
+          console.warn("LiveKit session error:", err);
+        }
+      });
+
+      livekitSessionRef.current = session;
+
+      await session.join({
+        roomName,
+        identity: currentUser.id,
+        name: currentUser.nickname || currentUser.username,
+        callType: callTypeToUse,
+        remoteVideoEl: remoteVideoRef.current,
+        localVideoEl: localVideoRef.current,
+        remoteAudioEl: remoteAudioRef.current
+      });
+    } catch (err) {
+      console.warn("LiveKit connect error, relying on signaling/local fallback:", err);
+    }
+  };
+
+// WebRTC ICE Configuration (STUN/TURN + DTLS-SRTP)
+const WEBRTC_ICE_SERVERS: RTCConfiguration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    { urls: 'stun:stun.services.mozilla.com:3478' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    }
+  ],
+  iceTransportPolicy: 'all',
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require'
+};
 
   // 1. Start an outgoing call
   const initiateCall = async (type: 'audio' | 'video', targetUserOverride?: User) => {
@@ -1422,19 +1697,18 @@ export default function App() {
 
     const isAiBot = partnerUser.id === "usr_parham_ai";
     const isGroupCall = partnerUser.id.startsWith("group_") || partnerUser.id.startsWith("channel_") || partnerUser.id === "global-group";
+    const roomName = isGroupCall
+      ? `privo_group_${partnerId}`
+      : `privo_call_${[currentUser.id, partnerId].sort().join('_')}`;
+    currentCallRoomRef.current = roomName;
+
+    // Connect to LiveKit SFU Cloud Room
+    connectLiveKitRoom(roomName, type);
 
     // Send real WebRTC invitation via WebSocket if connected
     let offerSdp: any = null;
     try {
-      const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun3.l.google.com:19302' },
-          { urls: 'stun:stun4.l.google.com:19302' }
-        ]
-      });
+      const pc = new RTCPeerConnection(WEBRTC_ICE_SERVERS);
       peerConnectionRef.current = pc;
 
       if (stream) {
@@ -1485,6 +1759,7 @@ export default function App() {
           signalType: "invite",
           data: {
             callType: type,
+            roomName: roomName,
             offer: offerSdp,
             senderInfo: {
               id: currentUser.id,
@@ -1534,6 +1809,15 @@ export default function App() {
     stopRingtone();
     setCallState('connected');
 
+    const isGroupCall = callPartner.id.startsWith("group_") || callPartner.id.startsWith("channel_") || callPartner.id === "global-group";
+    const roomName = currentCallRoomRef.current || (isGroupCall
+      ? `privo_group_${callPartner.id}`
+      : `privo_call_${[currentUser.id, callPartner.id].sort().join('_')}`);
+    currentCallRoomRef.current = roomName;
+
+    // Connect to LiveKit Room as callee
+    connectLiveKitRoom(roomName, callType);
+
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -1560,15 +1844,7 @@ export default function App() {
 
     let answerSdp: any = null;
     try {
-      const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun3.l.google.com:19302' },
-          { urls: 'stun:stun4.l.google.com:19302' }
-        ]
-      });
+      const pc = new RTCPeerConnection(WEBRTC_ICE_SERVERS);
       peerConnectionRef.current = pc;
 
       if (stream) {
@@ -1622,7 +1898,10 @@ export default function App() {
         payload: {
           targetUserId: callPartner.id,
           signalType: "accept",
-          data: { answer: answerSdp }
+          data: {
+            answer: answerSdp,
+            roomName: roomName
+          }
         }
       }));
     }
@@ -1691,6 +1970,9 @@ export default function App() {
   const toggleMute = () => {
     const newMute = !isMuted;
     setIsMuted(newMute);
+    if (livekitSessionRef.current) {
+      livekitSessionRef.current.setMicrophoneEnabled(!newMute);
+    }
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach(track => {
         track.enabled = !newMute;
@@ -1728,6 +2010,10 @@ export default function App() {
           setCallType('video');
           setIsCameraOff(false);
 
+          if (livekitSessionRef.current) {
+            livekitSessionRef.current.setCameraEnabled(true);
+          }
+
           if (callPartner && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({
               type: "call_signal",
@@ -1742,10 +2028,16 @@ export default function App() {
       } catch (err) {
         setCallType('video');
         setIsCameraOff(false);
+        if (livekitSessionRef.current) {
+          livekitSessionRef.current.setCameraEnabled(true);
+        }
       }
     } else {
       const newCameraOff = !isCameraOff;
       setIsCameraOff(newCameraOff);
+      if (livekitSessionRef.current) {
+        livekitSessionRef.current.setCameraEnabled(!newCameraOff);
+      }
       if (localStreamRef.current) {
         localStreamRef.current.getVideoTracks().forEach(track => {
           track.enabled = !newCameraOff;
@@ -1800,6 +2092,12 @@ export default function App() {
           pendingOfferRef.current = data.offer;
         }
 
+        if (data.roomName) {
+          currentCallRoomRef.current = data.roomName;
+        } else if (currentUser) {
+          currentCallRoomRef.current = `privo_call_${[currentUser.id, senderUserId].sort().join('_')}`;
+        }
+
         setCallPartner(partnerUser as User);
         setCallType(data.callType || 'audio');
         setCallState('incoming');
@@ -1811,12 +2109,20 @@ export default function App() {
 
       case 'accept': {
         stopRingtone();
+        if (data && data.roomName) {
+          currentCallRoomRef.current = data.roomName;
+        }
+
         if (callState === 'outgoing') {
           setCallState('connected');
           startCallDurationTimer();
 
           const partnerName = callPartner?.nickname || "کاربر مقابل";
           setRemoteStream(createFallbackStream(callType, partnerName));
+
+          if (currentCallRoomRef.current && (!livekitSessionRef.current || !livekitConnected)) {
+            connectLiveKitRoom(currentCallRoomRef.current, callType);
+          }
 
           if (data && data.answer && peerConnectionRef.current) {
             try {
@@ -1901,6 +2207,17 @@ export default function App() {
   // AI Voice Note Transcription handler
   const handleTranscribeVoice = async (msgId: string, fileUrl: string) => {
     if (transcribingIds[msgId]) return;
+
+    if (currentUser?.subscriptionTier !== 'plus' && currentUser?.role !== 'owner') {
+      const todayKey = `transcribe_count_${new Date().toISOString().slice(0, 10)}`;
+      const count = parseInt(localStorage.getItem(todayKey) || "0");
+      if (count >= 2) {
+        openSubscriptionForFeature("تبدیل نامحدود ویس به متن با AI");
+        return;
+      }
+      localStorage.setItem(todayKey, (count + 1).toString());
+    }
+
     setTranscribingIds(prev => ({ ...prev, [msgId]: true }));
     try {
       const res = await fetch("/api/ai/transcribe", {
@@ -1925,6 +2242,17 @@ export default function App() {
   // AI Message Translation handler
   const handleTranslateMessage = async (msgId: string, text: string) => {
     if (translatingIds[msgId]) return;
+
+    if (currentUser?.subscriptionTier !== 'plus' && currentUser?.role !== 'owner') {
+      const todayKey = `translate_count_${new Date().toISOString().slice(0, 10)}`;
+      const count = parseInt(localStorage.getItem(todayKey) || "0");
+      if (count >= 3) {
+        openSubscriptionForFeature("ترجمه نامحدود پیام‌ها با AI");
+        return;
+      }
+      localStorage.setItem(todayKey, (count + 1).toString());
+    }
+
     setTranslatingIds(prev => ({ ...prev, [msgId]: true }));
     try {
       const res = await fetch("/api/ai/translate", {
@@ -2024,14 +2352,31 @@ export default function App() {
     }
   };
 
-  // Delete chat entirely
-  const handleDeleteChat = (chatId: string) => {
+  // Delete chat (self or everyone)
+  const handleDeleteChat = (chatId: string, deleteType: 'self' | 'everyone' = 'everyone') => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: "delete_chat",
+        payload: { chatId, deleteType }
+      }));
+    }
+    setChats(prev => prev.filter(c => c.id !== chatId));
+    if (activeChatId === chatId) {
+      setActiveChatId(null);
+    }
+    setSelectedMessageIds([]);
+  };
+
+  // Clear chat history
+  const handleClearChatHistory = (chatId: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: "clear_chat_history",
         payload: { chatId }
       }));
     }
+    setMessages(prev => ({ ...prev, [chatId]: [] }));
+    setSelectedMessageIds([]);
   };
 
   // Setup WebSocket connection
@@ -2066,15 +2411,25 @@ export default function App() {
         if (type === "init") {
           const { chats: initChats, users: initUsers, messages: initMsgs, onlineUsers } = payload;
           
-          setChats(initChats);
           setUsers(initUsers);
+
+          // Decrypt chat lastMessageText for sidebar display
+          const processedChats = await Promise.all((initChats || []).map(async (c: Chat) => {
+            if (c.lastMessageText && c.lastMessageText.startsWith("ENC_SIM:")) {
+              const decryptionKey = "CHAT_KEY_" + c.id;
+              const decryptedLast = await decryptMessage(c.lastMessageText, privateKey, decryptionKey, c.id, c.members, c.creatorId);
+              return { ...c, lastMessageText: decryptedLast };
+            }
+            return c;
+          }));
+          setChats(processedChats);
 
           // Decrypt messages locally client-side
           const decryptedMsgs: { [chatId: string]: Message[] } = {};
           
           for (const msg of initMsgs) {
             let decryptedText = msg.content;
-            if (msg.isEncrypted && msg.type === 'text') {
+            if (msg.type === 'text' && (msg.isEncrypted || (msg.content && msg.content.startsWith("ENC_SIM:")))) {
               const chat = initChats.find(c => c.id === msg.chatId);
               const decryptionKey = "CHAT_KEY_" + msg.chatId;
               decryptedText = await decryptMessage(msg.content, privateKey, decryptionKey, msg.chatId, chat?.members, chat?.creatorId);
@@ -2092,7 +2447,7 @@ export default function App() {
           const { message: msg } = payload;
           
           let decryptedText = msg.content;
-          if (msg.isEncrypted && msg.type === 'text') {
+          if (msg.type === 'text' && (msg.isEncrypted || (msg.content && msg.content.startsWith("ENC_SIM:")))) {
             const chat = chatsRef.current.find(c => c.id === msg.chatId);
             const decryptionKey = "CHAT_KEY_" + msg.chatId;
             decryptedText = await decryptMessage(msg.content, privateKey, decryptionKey, msg.chatId, chat?.members, chat?.creatorId);
@@ -2127,7 +2482,7 @@ export default function App() {
             if (c.id === msg.chatId) {
               return {
                 ...c,
-                lastMessageText: newMsgObj.type === 'text' ? newMsgObj.content : `[${newMsgObj.type === 'voice' ? 'پیام صوتی' : 'فایل'}]`,
+                lastMessageText: newMsgObj.type === 'text' ? decryptedText : `[${newMsgObj.type === 'voice' ? 'پیام صوتی' : 'فایل'}]`,
                 lastMessageTime: newMsgObj.timestamp
               };
             }
@@ -2153,6 +2508,16 @@ export default function App() {
           const { chatId } = payload;
           setChats(prev => prev.filter(c => c.id !== chatId));
           setActiveChatId(prev => prev === chatId ? null : prev);
+          setSelectedMessageIds([]);
+        }
+
+        else if (type === "chat_history_cleared") {
+          const { chatId } = payload;
+          setMessages(prev => ({
+            ...prev,
+            [chatId]: []
+          }));
+          setSelectedMessageIds([]);
         }
 
         else if (type === "reaction_updated") {
@@ -2208,6 +2573,20 @@ export default function App() {
             ...prev,
             [registeredUser.id]: registeredUser
           }));
+        }
+
+        else if (type === "system_db_restored") {
+          // Re-authenticate WS connection to receive fresh initial state for all users
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && currentUserRef.current) {
+            wsRef.current.send(JSON.stringify({
+              type: "auth",
+              payload: { 
+                userId: currentUserRef.current.id,
+                userProfile: currentUserRef.current,
+                sessionId: localStorage.getItem("parham_session_id") || undefined
+              }
+            }));
+          }
         }
 
         else if (type === "message_edited") {
@@ -2419,9 +2798,32 @@ export default function App() {
     };
   }, []);
 
-  // Trigger typing status update to WebSocket
+  // Sync draft text into input when activeChatId changes
+  useEffect(() => {
+    if (activeChatId) {
+      setTextInput(drafts[activeChatId] || "");
+    } else {
+      setTextInput("");
+    }
+  }, [activeChatId]);
+
+  // Trigger typing status update to WebSocket and save active draft
   const handleTextInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setTextInput(e.target.value);
+    const val = e.target.value;
+    setTextInput(val);
+
+    if (activeChatId) {
+      setDrafts(prev => {
+        const next = { ...prev };
+        if (val.trim()) {
+          next[activeChatId] = val;
+        } else {
+          delete next[activeChatId];
+        }
+        localStorage.setItem("parham_chat_drafts", JSON.stringify(next));
+        return next;
+      });
+    }
 
     if (!isTyping && wsRef.current && wsRef.current.readyState === WebSocket.OPEN && activeChatId) {
       setIsTyping(true);
@@ -2628,6 +3030,40 @@ export default function App() {
   }) => {
     if (!currentUser) return;
 
+    let activeFileUrl = params.fileUrl;
+    let activeRawText = params.rawText;
+    let activeEncryptedText = params.encryptedText;
+
+    if (activeFileUrl && activeFileUrl.startsWith("data:")) {
+      try {
+        const uploadRes = await fetch("/api/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: params.fileName || `file_${Date.now()}.gif`,
+            fileType: params.fileType || "image/gif",
+            fileData: activeFileUrl,
+            userId: currentUser.id
+          })
+        });
+        if (uploadRes.ok) {
+          const uploadData = await uploadRes.json();
+          const cleanUrl = uploadData.downloadUrl || uploadData.fileUrl;
+          if (cleanUrl) {
+            activeFileUrl = cleanUrl;
+            if (activeRawText.includes("data:")) {
+              activeRawText = activeRawText.replace(/data:image\/[a-zA-Z0-9-+\/]+;base64,[a-zA-Z0-9+\/=]+/g, cleanUrl);
+            }
+            if (activeEncryptedText.includes("data:")) {
+              activeEncryptedText = activeEncryptedText.replace(/data:image\/[a-zA-Z0-9-+\/]+;base64,[a-zA-Z0-9+\/=]+/g, cleanUrl);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Auto upload base64 in enqueueAndSendMessage failed", e);
+      }
+    }
+
     const tempId = "msg_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
 
     const queueItem: OutgoingQueueItem = {
@@ -2635,11 +3071,11 @@ export default function App() {
       chatId: params.chatId,
       senderId: currentUser.id,
       senderNickname: currentUser.nickname,
-      content: params.encryptedText,
-      rawContent: params.rawText,
+      content: activeEncryptedText,
+      rawContent: activeRawText,
       type: params.type,
       voiceDuration: params.voiceDuration,
-      fileUrl: params.fileUrl,
+      fileUrl: activeFileUrl,
       fileName: params.fileName,
       fileSize: params.fileSize,
       fileType: params.fileType,
@@ -2655,12 +3091,12 @@ export default function App() {
       chatId: params.chatId,
       senderId: currentUser.id,
       senderNickname: currentUser.nickname,
-      content: params.rawText,
+      content: activeRawText,
       timestamp: queueItem.timestamp,
       reactions: {},
       type: params.type,
       voiceDuration: params.voiceDuration,
-      fileUrl: params.fileUrl,
+      fileUrl: activeFileUrl,
       fileName: params.fileName,
       fileSize: params.fileSize,
       fileType: params.fileType,
@@ -2704,6 +3140,15 @@ export default function App() {
     const rawText = textInput.trim();
     setTextInput("");
 
+    if (activeChatId) {
+      setDrafts(prev => {
+        const next = { ...prev };
+        delete next[activeChatId];
+        localStorage.setItem("parham_chat_drafts", JSON.stringify(next));
+        return next;
+      });
+    }
+
     if (editingMessage) {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({
@@ -2731,23 +3176,64 @@ export default function App() {
       chatId: activeChatId,
       type: 'text',
       rawText,
-      encryptedText,
-      isEncrypted: true,
+      encryptedText: rawText,
+      isEncrypted: false,
       replyToId: replyId
     });
   };
 
-  // CHUNKED HIGH-SPEED FILE UPLOAD
+  // SEND GIF DIRECTLY
+  const handleSendGif = async (gifUrl: string) => {
+    if (!activeChatId || !currentUser) return;
+    const gifMarkdown = `![GIF](${gifUrl})`;
+    await enqueueAndSendMessage({
+      chatId: activeChatId,
+      type: 'file',
+      rawText: gifMarkdown,
+      encryptedText: gifMarkdown,
+      isEncrypted: false,
+      fileUrl: gifUrl,
+      fileName: 'animated.gif',
+      fileType: 'image/gif'
+    });
+  };
+
+  // CHUNKED HIGH-SPEED FILE UPLOAD WITH AUTOMATIC WEBP CONVERSION FOR IMAGES
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !activeChatId || !currentUser) return;
+    const rawFile = e.target.files?.[0];
+    if (!rawFile || !activeChatId || !currentUser) return;
 
     setIsUploading(true);
     setUploadProgress(0);
+    setUploadSpeed("بهینه‌سازی و فشرده‌سازی...");
+
+    // Auto-optimize images to high-quality WebP format for fast delivery and SEO
+    let fileToUpload: File | Blob = rawFile;
+    let uploadFileName = rawFile.name;
+    let uploadFileType = rawFile.type;
+
+    if (rawFile.type.startsWith("image/") && !rawFile.type.includes("gif") && !rawFile.type.includes("svg+xml")) {
+      try {
+        const optimized = await optimizeImageToWebP(
+          rawFile, 
+          0.88, 
+          2560, 
+          2560, 
+          currentUser.nickname, 
+          activeChat?.name
+        );
+        fileToUpload = optimized.blob;
+        uploadFileName = optimized.name;
+        uploadFileType = optimized.type;
+      } catch (err) {
+        console.warn("Client image optimization skipped:", err);
+      }
+    }
+
     setUploadSpeed("آپلود پرسرعت...");
 
     const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const totalChunks = Math.ceil(fileToUpload.size / CHUNK_SIZE);
     const uploadId = "upload_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
 
     const startTime = Date.now();
@@ -2757,8 +3243,8 @@ export default function App() {
 
       for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
         const start = chunkIndex * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, file.size);
-        const blobChunk = file.slice(start, end);
+        const end = Math.min(start + CHUNK_SIZE, fileToUpload.size);
+        const blobChunk = fileToUpload.slice(start, end);
 
         // Convert blob chunk to base64
         const chunkData = await new Promise<string>((resolve, reject) => {
@@ -2775,8 +3261,8 @@ export default function App() {
             uploadId,
             chunkIndex,
             totalChunks,
-            fileName: file.name,
-            fileType: file.type,
+            fileName: uploadFileName,
+            fileType: uploadFileType,
             chunkData
           })
         });
@@ -2805,8 +3291,8 @@ export default function App() {
         await enqueueAndSendMessage({
           chatId: activeChatId,
           type: 'file',
-          rawText: `فایل ارسالی: ${file.name}`,
-          encryptedText: `فایل ارسالی: ${file.name}`,
+          rawText: `فایل ارسالی: ${uploadFileName}`,
+          encryptedText: `فایل ارسالی: ${uploadFileName}`,
           isEncrypted: false,
           fileUrl: finalData.fileUrl,
           fileName: finalData.fileName,
@@ -3143,6 +3629,78 @@ export default function App() {
     alert(`پیام با موفقیت به گفتگوی «${targetChat.name}» هدایت شد.`);
   };
 
+  // BULK MESSAGE SELECTION HANDLERS
+  const handleToggleSelectMessage = (messageId: string) => {
+    setSelectedMessageIds(prev => 
+      prev.includes(messageId) ? prev.filter(id => id !== messageId) : [...prev, messageId]
+    );
+  };
+
+  const handleCopySelectedMessages = () => {
+    if (selectedMessageIds.length === 0) return;
+    const selectedMsgs = rawActiveChatMessages.filter(m => selectedMessageIds.includes(m.id));
+    const combinedText = selectedMsgs.map(m => `${m.senderNickname}: ${m.content}`).join("\n---\n");
+    navigator.clipboard.writeText(combinedText);
+    alert(`متن ${selectedMessageIds.length} پیام انتخاب شده کپی شد.`);
+  };
+
+  const handleBulkDeleteMessages = (deleteType: 'self' | 'everyone') => {
+    if (selectedMessageIds.length === 0 || !activeChatId) return;
+    selectedMessageIds.forEach(msgId => {
+      handleDeleteMessage(msgId, deleteType);
+    });
+    setSelectedMessageIds([]);
+    setBulkDeleteModalOpen(false);
+  };
+
+  const handleBulkPinMessages = () => {
+    if (selectedMessageIds.length === 0 || !activeChatId) return;
+    selectedMessageIds.forEach(msgId => {
+      const msg = rawActiveChatMessages.find(m => m.id === msgId);
+      if (msg) {
+        handlePinMessage(msgId, !msg.isPinned);
+      }
+    });
+    setSelectedMessageIds([]);
+  };
+
+  const handleBulkForwardMessages = async (targetChatId: string) => {
+    if (selectedMessageIds.length === 0 || !currentUser) return;
+    const targetChat = chats.find(c => c.id === targetChatId);
+    if (!targetChat) return;
+
+    const selectedMsgs = rawActiveChatMessages.filter(m => selectedMessageIds.includes(m.id));
+    for (const msg of selectedMsgs) {
+      const targetChatKey = "CHAT_KEY_" + targetChat.id;
+      const encryptedText = await encryptMessage(msg.content, targetChatKey);
+      const tempId = "opt_" + Math.random().toString(36).substring(2, 9);
+
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: "send_message",
+          payload: {
+            msg: {
+              id: tempId,
+              chatId: targetChatId,
+              senderId: currentUser.id,
+              senderNickname: currentUser.nickname,
+              content: encryptedText,
+              timestamp: new Date().toISOString(),
+              type: msg.type || "text",
+              mediaUrl: msg.mediaUrl,
+              reactions: {},
+              forwardFromNickname: msg.senderNickname
+            }
+          }
+        }));
+      }
+    }
+    setSelectedMessageIds([]);
+    setBulkForwardModalOpen(false);
+    setActiveChatId(targetChatId);
+    alert(`${selectedMsgs.length} پیام انتخاب شده با موفقیت هدایت شدند.`);
+  };
+
   // SCROLL TO MESSAGE HELPERS
   const scrollToMessage = (msgId: string) => {
     const el = document.getElementById(`msg-${msgId}`);
@@ -3155,19 +3713,29 @@ export default function App() {
     }
   };
 
-  // Filter sidebar chats list based on filter tabs & search input
-  const filteredChats = chats.filter(c => {
-    // Filter type
-    if (chatFilter === 'direct' && c.type !== 'direct') return false;
-    if (chatFilter === 'group' && c.type !== 'group') return false;
-    if (chatFilter === 'channel' && c.type !== 'channel') return false;
+  // Filter sidebar chats list based on filter tabs & search input, sorted by pinned & last message time
+  const filteredChats = chats
+    .filter(c => {
+      // Filter type
+      if (chatFilter === 'direct' && c.type !== 'direct') return false;
+      if (chatFilter === 'group' && c.type !== 'group') return false;
+      if (chatFilter === 'channel' && c.type !== 'channel') return false;
 
-    // Filter search string
-    if (chatSearchQuery) {
-      return getChatDisplayName(c).toLowerCase().includes(chatSearchQuery.toLowerCase());
-    }
-    return true;
-  });
+      // Filter search string
+      if (chatSearchQuery) {
+        return getChatDisplayName(c).toLowerCase().includes(chatSearchQuery.toLowerCase());
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const isPinnedA = pinnedChatIds.includes(a.id) ? 1 : 0;
+      const isPinnedB = pinnedChatIds.includes(b.id) ? 1 : 0;
+      if (isPinnedA !== isPinnedB) return isPinnedB - isPinnedA;
+
+      const timeA = a.lastMessageTime ? new Date(a.lastMessageTime).getTime() : 0;
+      const timeB = b.lastMessageTime ? new Date(b.lastMessageTime).getTime() : 0;
+      return timeB - timeA;
+    });
 
   const activeChat = chats.find(c => c.id === activeChatId);
 
@@ -3192,7 +3760,7 @@ export default function App() {
   const rawActiveChatMessages = activeChatId ? (messages[activeChatId] || []) : [];
   
   // Filter active chat messages based on delete status and dynamic in-chat query
-  const activeChatMessages = rawActiveChatMessages.filter(msg => {
+  const filteredActiveMessages = rawActiveChatMessages.filter(msg => {
     if (msg.deletedFor && msg.deletedFor.includes(currentUser.id)) {
       return false;
     }
@@ -3202,25 +3770,29 @@ export default function App() {
     return true;
   });
 
-  // If user not authenticated, render beautiful Persian sign-up/login
+  const activeChatMessages = isLowRamMode 
+    ? filteredActiveMessages.slice(-messagesDisplayLimit) 
+    : filteredActiveMessages;
+
+  // If user not authenticated, render sign-up/login
   if (!currentUser) {
-    return <AuthScreen onAuthSuccess={handleAuthSuccess} />;
+    return <AuthScreen onAuthSuccess={handleAuthSuccess} appLanguage={appLanguage} onToggleLanguage={toggleLanguage} />;
   }
 
   return (
-    <div className={`h-screen flex flex-col font-sans theme-transition overflow-hidden ${activeTheme.mainBg} text-slate-100 dir-rtl`} dir="rtl">
+    <main id="main-content" role="main" className={`h-screen flex flex-col font-sans theme-transition overflow-hidden ${activeTheme.mainBg} text-slate-100 ${appLanguage === 'fa' ? 'dir-rtl' : 'dir-ltr'}`} dir={appLanguage === 'fa' ? 'rtl' : 'ltr'}>
       
       {/* Top Navigation / App Status Bar */}
       <header className={`h-14 shrink-0 px-4 flex items-center justify-between border-b ${activeTheme.borderCol} bg-slate-900/60 backdrop-blur-md relative z-20`}>
         <div className="flex items-center gap-3">
-          <div className={`flex items-center justify-center p-2 rounded-xl border ${activeTheme.borderCol} bg-slate-950/80 ${activeTheme.primaryText}`}>
-            <Lock className="w-4 h-4" />
-          </div>
+          <PrivoLogo size={36} glow className="w-9 h-9 shrink-0" />
           <div>
-            <h1 className="text-xs font-black text-white">پلتفرم پیام‌رسان فوق امن پرهام</h1>
+            <h1 className="text-base font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-slate-200 to-slate-400 font-privo tracking-widest uppercase">
+              PRIVO
+            </h1>
             <p className="text-[9px] text-slate-400 mt-0.5 flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>رمزنگاری سراسری فعال است (کلید ۲۵۶ بیتی)</span>
+              <span>رمزنگاری سرتاسری E2EE فعال است</span>
             </p>
           </div>
         </div>
@@ -3235,7 +3807,9 @@ export default function App() {
             {currentUser.avatarUrl ? (
               <img 
                 src={currentUser.avatarUrl} 
-                alt={currentUser.nickname} 
+                alt={`پروفایل کاربری ${currentUser.nickname} در پیام‌رسان پریوو`} 
+                loading="lazy"
+                decoding="async"
                 className="w-8 h-8 rounded-xl object-cover border border-slate-700 shadow-sm shrink-0"
                 referrerPolicy="no-referrer"
               />
@@ -3288,6 +3862,15 @@ export default function App() {
               <span className="text-[10px] font-black hidden sm:inline">مدیریت سیستم</span>
             </button>
           )}
+
+          <button
+            onClick={() => toggleLanguage(appLanguage === 'fa' ? 'en' : 'fa')}
+            className="p-2 bg-slate-800 hover:bg-slate-700/80 border border-slate-700/50 text-indigo-300 hover:text-white rounded-xl transition shadow-md flex items-center gap-1 font-bold text-xs"
+            title={appLanguage === 'fa' ? 'تغییر زبان به انگلیسی (English)' : 'تغییر زبان به فارسی (Persian)'}
+          >
+            <Globe className="w-4 h-4 text-indigo-400" />
+            <span className="text-[10px] uppercase font-black">{appLanguage === 'fa' ? 'EN' : 'فا'}</span>
+          </button>
 
           <button
             onClick={() => setShowSettings(true)}
@@ -3370,10 +3953,33 @@ export default function App() {
                 const chatMsgs = messages[c.id] || [];
                 const unreadCount = chatMsgs.filter(m => m.senderId !== currentUser?.id && m.status !== "read").length;
 
+                const isPinned = pinnedChatIds.includes(c.id);
+                const isMuted = mutedChatIds.includes(c.id);
+
                 return (
                   <button
                     key={c.id}
                     onClick={() => { setActiveChatId(c.id); setShowAdvancedSearch(false); }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSelectedChatForMenu(c);
+                      setChatContextMenuPos({ x: e.clientX, y: e.clientY });
+                    }}
+                    onTouchStart={(e) => {
+                      const touch = e.touches[0];
+                      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                      longPressTimerRef.current = setTimeout(() => {
+                        setSelectedChatForMenu(c);
+                        setChatContextMenuPos({ x: touch.clientX, y: touch.clientY });
+                      }, 450);
+                    }}
+                    onTouchMove={() => {
+                      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                    }}
+                    onTouchEnd={() => {
+                      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                    }}
                     className={`w-full text-right p-3 rounded-2xl border transition flex items-center justify-between group relative ${isActive ? activeTheme.activeItemBg : 'bg-transparent border-transparent hover:bg-slate-800/30'}`}
                   >
                     <div className="flex items-center gap-3 min-w-0">
@@ -3383,7 +3989,9 @@ export default function App() {
                         {otherUser?.avatarUrl ? (
                           <img 
                             src={otherUser.avatarUrl} 
-                            alt={getChatDisplayName(c)} 
+                            alt={`آواتار گفتگوی ${getChatDisplayName(c)} در پیام‌رسان پریوو`} 
+                            loading="lazy"
+                            decoding="async"
                             className="w-10 h-10 rounded-2xl object-cover shadow-md"
                             referrerPolicy="no-referrer"
                           />
@@ -3400,6 +4008,8 @@ export default function App() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="text-xs font-bold text-white truncate max-w-[120px]">{getChatDisplayName(c)}</span>
+                          {isPinned && <Pin className="w-3 h-3 text-amber-400 rotate-45 shrink-0" title="پین شده" />}
+                          {isMuted && <VolumeX className="w-3 h-3 text-slate-500 shrink-0" title="بی‌صدا" />}
                           {c.type === 'group' && (
                             <span className="px-1.5 py-0.2 rounded-md bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[8px] font-black flex items-center gap-1">
                               <Users className="w-2.5 h-2.5" />
@@ -3487,7 +4097,9 @@ export default function App() {
                         return (
                           <img 
                             src={otherUser.avatarUrl} 
-                            alt={getChatDisplayName(activeChat)} 
+                            alt={`آواتار گفتگوی جاری با ${getChatDisplayName(activeChat)} در پیام‌رسان پریوو`} 
+                            loading="lazy"
+                            decoding="async"
                             className="w-10 h-10 rounded-2xl object-cover shadow-md group-hover:ring-2 group-hover:ring-indigo-500/50 transition"
                             referrerPolicy="no-referrer"
                           />
@@ -3572,6 +4184,22 @@ export default function App() {
                   </button>
 
                   <button
+                    onClick={() => {
+                      if (selectedMessageIds.length > 0) {
+                        setSelectedMessageIds([]);
+                      } else {
+                        if (activeChatMessages.length > 0) {
+                          setSelectedMessageIds([activeChatMessages[activeChatMessages.length - 1].id]);
+                        }
+                      }
+                    }}
+                    className={`p-2 rounded-xl border transition ${selectedMessageIds.length > 0 ? 'bg-teal-600/20 border-teal-500/40 text-teal-400 shadow-[0_0_10px_rgba(20,184,166,0.3)]' : 'bg-transparent border-transparent text-slate-400 hover:text-white hover:bg-slate-800/60'}`}
+                    title="حالت انتخاب گروهی پیام‌ها"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                  </button>
+
+                  <button
                     onClick={() => setIsMessageSearching(!isMessageSearching)}
                     className={`p-2 rounded-xl border transition ${isMessageSearching ? 'bg-amber-600/10 border-amber-500/30 text-amber-400' : 'bg-transparent border-transparent text-slate-400 hover:text-white hover:bg-slate-800/60'}`}
                     title="جستجوی سریع پیام‌ها"
@@ -3600,6 +4228,14 @@ export default function App() {
                     title="تماس تصویری زنده HD"
                   >
                     <Video className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    onClick={() => setDeleteChatModalTarget(activeChat)}
+                    className="p-2 text-rose-400/80 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition flex items-center justify-center"
+                    title="حذف یا پاکسازی این گفت‌وگو"
+                  >
+                    <Trash2 className="w-4 h-4" />
                   </button>
 
                   {activeChat.type === 'direct' && (
@@ -3892,6 +4528,21 @@ export default function App() {
                       )}
 
                       <div className="flex items-end gap-1.5 max-w-[85%] sm:max-w-[80%] min-w-0 group relative">
+                        {/* Checkbox for Message Multi-Selection */}
+                        {(selectedMessageIds.length > 0 || selectedMessageIds.includes(msg.id)) && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleSelectMessage(msg.id);
+                            }}
+                            className={`p-1 rounded-full transition shrink-0 self-center ${isOwn ? 'order-last mr-1' : 'order-first ml-1'}`}
+                            title={selectedMessageIds.includes(msg.id) ? "خروج از انتخاب" : "انتخاب پیام"}
+                          >
+                            <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition ${selectedMessageIds.includes(msg.id) ? 'bg-teal-500 border-teal-400 text-slate-950 shadow-[0_0_10px_rgba(20,184,166,0.6)]' : 'border-slate-600 bg-slate-900/80 hover:border-teal-400'}`}>
+                              {selectedMessageIds.includes(msg.id) && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                            </div>
+                          </button>
+                        )}
                         
                         {/* Option actions and reactions list trigger button */}
                         <div className={`opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 shrink-0 self-center ${isOwn ? 'order-first' : 'order-last'}`}>
@@ -3927,6 +4578,11 @@ export default function App() {
 
                         {/* MESSAGE BUBBLE */}
                         <div 
+                          onClick={() => {
+                            if (selectedMessageIds.length > 0) {
+                              handleToggleSelectMessage(msg.id);
+                            }
+                          }}
                           onDoubleClick={() => setReplyingToMessage(msg)}
                           onMouseDown={() => handleMessagePressStart(msg.id)}
                           onMouseUp={() => handleMessagePressEnd(msg.id)}
@@ -3938,7 +4594,7 @@ export default function App() {
                             e.preventDefault();
                             setActiveMenuMessageId(msg.id);
                           }}
-                          className={`p-3 rounded-2xl text-xs space-y-1.5 relative shadow-md border cursor-pointer select-text min-w-0 max-w-full ${frameInfo.cls ? `${frameInfo.cls} ${isOwn ? activeTheme.ownBubbleBg : activeTheme.cardBg}` : (isOwn ? `${activeTheme.ownBubbleBg} rounded-tr-none text-right` : `${activeTheme.cardBg} ${activeTheme.borderCol} rounded-tl-none text-right`)} ${isOwn ? 'rounded-tr-none text-right' : 'rounded-tl-none text-right'}`}
+                          className={`p-3 rounded-2xl text-xs space-y-1.5 relative shadow-md border cursor-pointer select-text min-w-0 max-w-full ${selectedMessageIds.includes(msg.id) ? 'ring-2 ring-teal-400 border-teal-500 bg-teal-950/30' : ''} ${frameInfo.cls ? `${frameInfo.cls} ${isOwn ? activeTheme.ownBubbleBg : activeTheme.cardBg}` : (isOwn ? `${activeTheme.ownBubbleBg} rounded-tr-none text-right` : `${activeTheme.cardBg} ${activeTheme.borderCol} rounded-tl-none text-right`)} ${isOwn ? 'rounded-tr-none text-right' : 'rounded-tl-none text-right'}`}
                           title="لمس طولانی (۱ ثانیه) یا راست‌کلیک برای عملیات پیام / دوبار کلیک برای پاسخ سریع"
                         >
                           {frameInfo.decorations}
@@ -3967,24 +4623,65 @@ export default function App() {
 
                           {/* File Display */}
                           {msg.type === 'file' && msg.fileUrl && (() => {
-                            const isImage = msg.fileType?.startsWith('image/') || msg.fileName?.match(/\.(jpeg|jpg|gif|png|webp|svg)$/i);
-                            const isVideo = msg.fileType?.startsWith('video/') || msg.fileName?.match(/\.(mp4|webm|ogg|mov|mkv|avi|3gp)$/i);
-                            const isAudio = msg.fileType?.startsWith('audio/') || msg.fileName?.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/i);
+                            const isGif = msg.fileType === 'image/gif' || 
+                                          Boolean(msg.fileName?.match(/\.gif$/i)) || 
+                                          (typeof msg.rawContent === 'string' && msg.rawContent.includes('![GIF]')) ||
+                                          (typeof msg.content === 'string' && msg.content.includes('![GIF]'));
+                            const isImage = (msg.fileType?.startsWith('image/') || Boolean(msg.fileName?.match(/\.(jpeg|jpg|gif|png|webp|svg)$/i))) && !isGif;
+                            const isVideo = msg.fileType?.startsWith('video/') || Boolean(msg.fileName?.match(/\.(mp4|webm|ogg|mov|mkv|avi|3gp)$/i));
+                            const isAudio = msg.fileType?.startsWith('audio/') || Boolean(msg.fileName?.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/i));
+
+                            if (isGif) {
+                              const gifAlt = `تصویر متحرک گیف: ${msg.fileName || "انیمیشن"} — پیام‌رسان فوق امن پریوو Privo`;
+                              return (
+                                <div 
+                                  className="rounded-2xl overflow-hidden max-w-[280px] sm:max-w-[320px] border border-slate-800/80 bg-slate-950/40 relative group/gif cursor-pointer transition-transform duration-200 hover:scale-[1.01]"
+                                  onClick={() => {
+                                    setLightboxUrl(msg.fileUrl || null);
+                                    setLightboxName(gifAlt);
+                                  }}
+                                >
+                                  <picture className="w-full block">
+                                    <img 
+                                      src={msg.fileUrl} 
+                                      alt={gifAlt} 
+                                      loading="lazy"
+                                      decoding="async"
+                                      className="max-h-64 object-contain w-full rounded-2xl"
+                                      referrerPolicy="no-referrer"
+                                    />
+                                  </picture>
+                                  <div className="absolute top-2 right-2 bg-slate-900/80 backdrop-blur-md text-[9px] font-black text-slate-300 px-2 py-0.5 rounded-full border border-slate-700/60 shadow-md flex items-center gap-1 pointer-events-none">
+                                    <span>GIF</span>
+                                  </div>
+                                </div>
+                              );
+                            }
 
                             if (isImage) {
+                              const imageAlt = generateDescriptiveImageAlt(
+                                msg.fileName, 
+                                activeChat?.name, 
+                                msg.senderNickname
+                              );
                               return (
                                 <div className="p-2 bg-slate-950/60 border border-slate-800/80 rounded-xl space-y-2 text-right max-w-[280px]">
                                   <div className="rounded-lg overflow-hidden border border-slate-800 bg-slate-900/40 relative group/img">
-                                    <img 
-                                      src={msg.fileUrl} 
-                                      alt={msg.fileName || "تصویر"} 
-                                      className="max-h-48 object-cover w-full cursor-zoom-in hover:scale-102 transition duration-200"
-                                      referrerPolicy="no-referrer"
-                                      onClick={() => {
-                                        setLightboxUrl(msg.fileUrl || null);
-                                        setLightboxName(msg.fileName || "تصویر پیش‌نمایش");
-                                      }}
-                                    />
+                                    <picture className="w-full block">
+                                      <source srcSet={msg.fileUrl} type="image/webp" />
+                                      <img 
+                                        src={msg.fileUrl} 
+                                        alt={imageAlt} 
+                                        loading="lazy"
+                                        decoding="async"
+                                        className="max-h-48 object-cover w-full cursor-zoom-in hover:scale-102 transition duration-200"
+                                        referrerPolicy="no-referrer"
+                                        onClick={() => {
+                                          setLightboxUrl(msg.fileUrl || null);
+                                          setLightboxName(imageAlt);
+                                        }}
+                                      />
+                                    </picture>
                                     {/* Overlay with full size zoom hint */}
                                     <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center transition duration-200 pointer-events-none">
                                       <span className="text-[10px] text-white bg-slate-900/80 px-2 py-1 rounded-lg border border-slate-700 font-bold">بزرگنمایی تصویر 🔍</span>
@@ -3992,7 +4689,7 @@ export default function App() {
                                   </div>
                                   <a
                                     href={msg.fileUrl}
-                                    download={msg.fileName}
+                                    download={msg.fileName || "image.webp"}
                                     className={`w-full py-1.5 ${activeTheme.primaryBg} ${activeTheme.primaryHoverBg} text-white text-[10px] font-bold rounded-lg transition flex items-center justify-center gap-1`}
                                   >
                                     <Download className="w-3.5 h-3.5" />
@@ -4201,6 +4898,14 @@ export default function App() {
                               <span>پاسخ دادن</span>
                               <span className="text-slate-500 text-[9px]">Reply</span>
                             </button>
+
+                            <button
+                              onClick={() => { handleToggleSelectMessage(msg.id); setActiveMenuMessageId(null); }}
+                              className="w-full text-right px-2.5 py-1.5 hover:bg-slate-800 text-[10px] text-teal-300 rounded-lg transition flex items-center justify-between"
+                            >
+                              <span>{selectedMessageIds.includes(msg.id) ? "لغو انتخاب" : "انتخاب پیام"}</span>
+                              <span className="text-teal-400/60 text-[9px]">Select</span>
+                            </button>
                             
                             <button
                               onClick={() => { navigator.clipboard.writeText(msg.content); alert("متن پیام کپی شد."); setActiveMenuMessageId(null); }}
@@ -4298,6 +5003,96 @@ export default function App() {
                 )}
               </AnimatePresence>
 
+              {/* FLOATING MULTI-MESSAGE SELECTION ACTION BAR */}
+              <AnimatePresence>
+                {selectedMessageIds.length > 0 && (
+                  <motion.div
+                    initial={{ y: 50, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: 50, opacity: 0 }}
+                    className="p-3 bg-slate-900/95 border-t-2 border-teal-500/50 backdrop-blur-xl shrink-0 relative z-30 shadow-[0_-10px_30px_rgba(0,0,0,0.6)] flex items-center justify-between gap-2 text-white dir-rtl"
+                    dir="rtl"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        onClick={() => setSelectedMessageIds([])}
+                        className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition flex items-center gap-1 text-xs"
+                        title="انصراف و خروج از حالت انتخاب"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-full bg-teal-500/20 text-teal-400 font-extrabold text-xs flex items-center justify-center border border-teal-500/40 shadow-[0_0_10px_rgba(20,184,166,0.4)]">
+                          {selectedMessageIds.length}
+                        </span>
+                        <span className="text-xs font-bold text-slate-100 hidden sm:inline">پیام انتخاب شده</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 sm:gap-2">
+                      {/* Select All toggle */}
+                      <button
+                        onClick={() => {
+                          if (selectedMessageIds.length === rawActiveChatMessages.length) {
+                            setSelectedMessageIds([]);
+                          } else {
+                            setSelectedMessageIds(rawActiveChatMessages.map(m => m.id));
+                          }
+                        }}
+                        className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition flex items-center gap-1 border border-slate-700/60"
+                        title="انتخاب یا لغو انتخاب همه پیام‌ها"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 text-teal-400" />
+                        <span className="hidden sm:inline">
+                          {selectedMessageIds.length === rawActiveChatMessages.length ? "لغو همه" : "انتخاب همه"}
+                        </span>
+                      </button>
+
+                      {/* Copy Text */}
+                      <button
+                        onClick={handleCopySelectedMessages}
+                        className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-300 hover:text-sky-200 rounded-xl text-xs font-bold transition flex items-center gap-1 border border-sky-500/30"
+                        title="کپی متن پیام‌های انتخاب شده"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span className="hidden md:inline">کپی</span>
+                      </button>
+
+                      {/* Bulk Forward */}
+                      <button
+                        onClick={() => setBulkForwardModalOpen(true)}
+                        className="px-2.5 py-1.5 bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 rounded-xl text-xs font-bold transition flex items-center gap-1 border border-sky-500/40"
+                        title="هدایت (فوروارد) به گفتگوی دیگر"
+                      >
+                        <CornerUpLeft className="w-3.5 h-3.5" />
+                        <span className="hidden md:inline">هدایت</span>
+                      </button>
+
+                      {/* Bulk Pin */}
+                      <button
+                        onClick={handleBulkPinMessages}
+                        className="px-2.5 py-1.5 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 rounded-xl text-xs font-bold transition flex items-center gap-1 border border-amber-500/40"
+                        title="سنجاق کردن پیام‌های انتخاب شده"
+                      >
+                        <Pin className="w-3.5 h-3.5" />
+                        <span className="hidden md:inline">سنجاق</span>
+                      </button>
+
+                      {/* Bulk Delete */}
+                      <button
+                        onClick={() => setBulkDeleteModalOpen(true)}
+                        className="px-2.5 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 rounded-xl text-xs font-bold transition flex items-center gap-1 border border-rose-500/40"
+                        title="حذف پیام‌های انتخاب شده"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span className="hidden md:inline">حذف</span>
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               {/* Chat Input Toolbar / Bar */}
               <div className="p-3 bg-slate-900/60 backdrop-blur-md border-t border-slate-800/80 shrink-0 relative z-10 space-y-2">
                 
@@ -4388,7 +5183,31 @@ export default function App() {
                 )}
 
                 {/* Hands-Free Voice Recorder Bar if LOCKED */}
-                {isRecording && isVoiceLocked ? (
+                {(currentUser?.role === 'owner' || currentUser?.username?.toLowerCase() === 'parham' || currentUser?.id === 'usr_parham') ? (
+                  <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-center space-y-1 text-right dir-rtl" dir="rtl">
+                    <p className="text-xs font-bold text-amber-300 flex items-center justify-center gap-2">
+                      <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>چت کردن و ارسال پیام برای مالک سیستم (پرهام) غیرفعال است</span>
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      به عنوان مالک سیستم شما هیچ دسترسی به چت کردن و ارسال پیام ندارید. مدیریت تنها از طریق پنل مدیریت انجام می‌پذیرد.
+                    </p>
+                  </div>
+                ) : (activeChat?.type === 'direct' && (() => {
+                  const otherId = activeChat.members.find(m => m !== currentUser?.id);
+                  const u = otherId ? users[otherId] : null;
+                  return u && (u.role === 'owner' || u.username?.toLowerCase() === 'parham' || u.id === 'usr_parham');
+                })()) ? (
+                  <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-center space-y-1 text-right dir-rtl" dir="rtl">
+                    <p className="text-xs font-bold text-amber-300 flex items-center justify-center gap-2">
+                      <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>ارتباط مستقیم (پیوی) با مالک سیستم غیرفعال می‌باشد</span>
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      جهت مطرح کردن سوالات، گزارش باگ یا تخلفات لطفاً پیام خود را برای «ربات پشتیبانی و گزارشات 🤖» ارسال نمایید.
+                    </p>
+                  </div>
+                ) : isRecording && isVoiceLocked ? (
                   <div className="flex items-center justify-between gap-3 bg-slate-950/90 border border-indigo-500/50 p-2.5 rounded-2xl shadow-xl animate-pulse">
                     {/* Cancel button */}
                     <button
@@ -4456,21 +5275,31 @@ export default function App() {
                     <div className="flex-1 relative">
                       <input
                         type="text"
-                        placeholder="پیام خود را به صورت کاملا سرتاسری رمزنگاری شده بنویسید..."
+                        placeholder={appLanguage === 'en' ? 'Type an end-to-end encrypted message...' : 'پیام خود را به صورت کاملا سرتاسری رمزنگاری شده بنویسید...'}
                         value={textInput}
                         onChange={handleTextInputChange}
-                        className={`w-full pr-4 pl-12 py-3 bg-slate-950 border ${activeTheme.borderCol} rounded-2xl text-xs text-slate-100 focus:outline-none focus:ring-1 ${activeTheme.ringCol} transition`}
+                        className={`w-full pr-4 pl-20 py-3 bg-slate-950 border ${activeTheme.borderCol} rounded-2xl text-xs text-slate-100 focus:outline-none focus:ring-1 ${activeTheme.ringCol} transition`}
                       />
 
-                      {/* Rich Emoji Picker Button */}
-                      <button
-                        type="button"
-                        onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                        className={`absolute inset-y-0 left-0 pl-3.5 flex items-center transition ${showEmojiPicker ? activeTheme.primaryText : 'text-slate-500 hover:text-slate-300'}`}
-                        title="انتخاب ایموجی"
-                      >
-                        <Smile className="w-4.5 h-4.5" />
-                      </button>
+                      {/* GIF & Emoji Action Buttons */}
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setShowGifPicker(true)}
+                          className="p-1 text-slate-500 hover:text-indigo-400 transition"
+                          title={appLanguage === 'en' ? 'Send Animated GIF' : 'ارسال گیف انیمیشنی'}
+                        >
+                          <Film className="w-4.5 h-4.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                          className={`p-1 transition ${showEmojiPicker ? activeTheme.primaryText : 'text-slate-500 hover:text-slate-300'}`}
+                          title={appLanguage === 'en' ? 'Select Emoji' : 'انتخاب ایموجی'}
+                        >
+                          <Smile className="w-4.5 h-4.5" />
+                        </button>
+                      </div>
 
                       {/* Rich Emoji Picker Popup */}
                       <AnimatePresence>
@@ -4695,6 +5524,48 @@ export default function App() {
                         >
                           <Plus className="w-3.5 h-3.5" />
                           <span className="text-[9px] font-bold">جدید</span>
+                        </button>
+                      </div>
+
+                      {/* AI Mode Selector Bar */}
+                      <div className="flex items-center justify-between gap-1 p-1 bg-slate-900/90 border border-slate-850 rounded-xl mb-2 shrink-0 text-[9px] font-bold dir-rtl" dir="rtl">
+                        <button
+                          type="button"
+                          onClick={() => setAiChatMode("fast")}
+                          className={`flex-1 py-1.5 px-2 rounded-lg transition flex items-center justify-center gap-1 ${aiChatMode === "fast" ? "bg-amber-500 text-slate-950 font-black shadow-sm" : "text-slate-400 hover:text-white"}`}
+                        >
+                          <Zap className="w-3 h-3 text-amber-950" />
+                          <span>پاسخ سریع</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (currentUser?.subscriptionTier !== 'plus' && currentUser?.role !== 'owner') {
+                              openSubscriptionForFeature("تفکر بالا و استدلال عمیق (Reasoning Mode)");
+                              return;
+                            }
+                            setAiChatMode("reasoning");
+                          }}
+                          className={`flex-1 py-1.5 px-2 rounded-lg transition flex items-center justify-center gap-1 ${aiChatMode === "reasoning" ? "bg-purple-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"}`}
+                        >
+                          <Brain className="w-3 h-3 text-purple-300" />
+                          <span>تفکر بالا ⭐</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (currentUser?.subscriptionTier !== 'plus' && currentUser?.role !== 'owner') {
+                              openSubscriptionForFeature("پردازش تصویر و ویدیو با AI");
+                              return;
+                            }
+                            setAiChatMode("vision_video");
+                          }}
+                          className={`flex-1 py-1.5 px-2 rounded-lg transition flex items-center justify-center gap-1 ${aiChatMode === "vision_video" ? "bg-cyan-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"}`}
+                        >
+                          <Eye className="w-3 h-3 text-cyan-200" />
+                          <span>عکس و ویدیو ⭐</span>
                         </button>
                       </div>
 
@@ -5009,12 +5880,21 @@ export default function App() {
                             تصویر شما آماده شد:
                           </p>
                           <div className="rounded-xl overflow-hidden border border-slate-800">
-                            <img src={generatedImageResult} alt="تصویر خلق شده" className="w-full h-auto max-h-72 object-cover" />
+                            <picture className="w-full block">
+                              <source srcSet={generatedImageResult} type="image/webp" />
+                              <img 
+                                src={generatedImageResult} 
+                                alt={`تصویر خلق شده توسط هوش مصنوعی در پیام‌رسان پریوو: ${imagePrompt} — Privo AI`} 
+                                loading="lazy"
+                                decoding="async"
+                                className="w-full h-auto max-h-72 object-cover" 
+                              />
+                            </picture>
                           </div>
                           <div className="flex items-center justify-between gap-2 pt-1">
                             <a
                               href={generatedImageResult}
-                              download="ai-generated.jpg"
+                              download="ai-generated.webp"
                               target="_blank"
                               rel="noreferrer"
                               className="flex-1 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-200 text-[10px] font-bold rounded-xl border border-slate-800 transition flex items-center justify-center gap-1"
@@ -5041,7 +5921,16 @@ export default function App() {
                           <div className="grid grid-cols-2 gap-2">
                             {generatedImagesHistory.map((item) => (
                               <div key={item.id} className="p-1.5 bg-slate-900 border border-slate-800 rounded-xl space-y-1 group relative">
-                                <img src={item.url} alt={item.prompt} className="w-full h-24 object-cover rounded-lg" />
+                                <picture className="w-full block">
+                                  <source srcSet={item.url} type="image/webp" />
+                                  <img 
+                                    src={item.url} 
+                                    alt={`تصویر هوش مصنوعی: ${item.prompt} — پریوو`} 
+                                    loading="lazy"
+                                    decoding="async"
+                                    className="w-full h-24 object-cover rounded-lg" 
+                                  />
+                                </picture>
                                 <p className="text-[8px] text-slate-400 truncate">{item.prompt}</p>
                                 <div className="flex items-center justify-between gap-1 pt-0.5">
                                   <a href={item.url} download target="_blank" rel="noreferrer" className="text-[8px] text-sky-400 hover:underline">
@@ -5077,6 +5966,11 @@ export default function App() {
             users={users}
             onClose={() => setShowSettings(false)}
             onLogout={handleLogout}
+            isLowRamMode={isLowRamMode}
+            onToggleLowRamMode={toggleLowRamMode}
+            appLanguage={appLanguage}
+            onToggleLanguage={toggleLanguage}
+            onOpenSubscription={openSubscriptionForFeature}
             onUpdateProfile={(updatedUser) => {
               setCurrentUser(updatedUser);
               localStorage.setItem("parham_user", JSON.stringify(updatedUser));
@@ -5089,6 +5983,131 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* CONTEXT MENU FOR CHAT ITEM (RIGHT CLICK & LONG PRESS) */}
+      <AnimatePresence>
+        {selectedChatForMenu && (
+          <div 
+            className="fixed inset-0 z-[160] bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-4 select-none"
+            onClick={() => { setSelectedChatForMenu(null); setChatContextMenuPos(null); }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 10 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-xs bg-slate-900 border border-slate-800 rounded-3xl p-4 shadow-2xl space-y-2"
+              dir="rtl"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800/80">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm ${selectedChatForMenu.avatarColor || 'bg-slate-800'} shrink-0`}>
+                    {selectedChatForMenu.avatarEmoji || '💬'}
+                  </div>
+                  <span className="text-xs font-bold text-white truncate max-w-[170px]">
+                    {getChatDisplayName(selectedChatForMenu)}
+                  </span>
+                </div>
+                <button 
+                  onClick={() => { setSelectedChatForMenu(null); setChatContextMenuPos(null); }}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-1 pt-1">
+                {/* Pin / Unpin */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    togglePinChat(selectedChatForMenu.id);
+                    setSelectedChatForMenu(null);
+                  }}
+                  className="w-full py-2.5 px-3 hover:bg-slate-800 text-slate-200 text-xs font-bold rounded-xl transition flex items-center gap-2.5"
+                >
+                  <Pin className="w-4 h-4 text-amber-400" />
+                  <span>{pinnedChatIds.includes(selectedChatForMenu.id) ? "برداشتن پین گفت‌وگو" : "پین کردن در بالای لیست"}</span>
+                </button>
+
+                {/* Mute / Unmute */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    toggleMuteChat(selectedChatForMenu.id);
+                    setSelectedChatForMenu(null);
+                  }}
+                  className="w-full py-2.5 px-3 hover:bg-slate-800 text-slate-200 text-xs font-bold rounded-xl transition flex items-center gap-2.5"
+                >
+                  {mutedChatIds.includes(selectedChatForMenu.id) ? (
+                    <>
+                      <Volume2 className="w-4 h-4 text-emerald-400" />
+                      <span>فعال‌سازی صدا و اعلانات</span>
+                    </>
+                  ) : (
+                    <>
+                      <VolumeX className="w-4 h-4 text-slate-400" />
+                      <span>بی‌صدا کردن اعلانات</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Block / Unblock User (For Direct Chats) */}
+                {selectedChatForMenu.type === 'direct' && (() => {
+                  const partnerId = selectedChatForMenu.members.find(m => m !== currentUser?.id);
+                  if (!partnerId) return null;
+                  const partnerUser = users[partnerId];
+                  const isBlocked = currentUser?.blockedUsers?.includes(partnerId);
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleToggleBlockFromMenu(partnerId);
+                        setSelectedChatForMenu(null);
+                      }}
+                      className="w-full py-2.5 px-3 hover:bg-slate-800 text-rose-400 text-xs font-bold rounded-xl transition flex items-center gap-2.5"
+                    >
+                      <UserX className="w-4 h-4 text-rose-400" />
+                      <span>{isBlocked ? `رفع مسدودیت ${partnerUser?.nickname || 'کاربر'}` : `مسدودسازی کاربر (${partnerUser?.nickname || 'کاربر'})`}</span>
+                    </button>
+                  );
+                })()}
+
+                {/* View Info */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedChatForMenu.type === 'direct') {
+                      const partnerId = selectedChatForMenu.members.find(m => m !== currentUser?.id);
+                      if (partnerId) setSelectedProfileUserId(partnerId);
+                    } else {
+                      setSelectedProfileGroupId(selectedChatForMenu.id);
+                    }
+                    setSelectedChatForMenu(null);
+                  }}
+                  className="w-full py-2.5 px-3 hover:bg-slate-800 text-slate-200 text-xs font-bold rounded-xl transition flex items-center gap-2.5"
+                >
+                  <Eye className="w-4 h-4 text-blue-400" />
+                  <span>مشاهده اطلاعات و مشخصات</span>
+                </button>
+
+                {/* Delete / Clear Chat */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteChatModalTarget(selectedChatForMenu);
+                    setSelectedChatForMenu(null);
+                  }}
+                  className="w-full py-2.5 px-3 hover:bg-rose-500/10 text-rose-400 text-xs font-bold rounded-xl transition flex items-center gap-2.5 border border-rose-500/10 mt-1"
+                >
+                  <Trash2 className="w-4 h-4 text-rose-400" />
+                  <span>حذف یا پاکسازی گفت‌وگو</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* NEW CHAT / GROUP MODAL */}
       <AnimatePresence>
         {showNewChat && (
@@ -5097,6 +6116,19 @@ export default function App() {
             users={users}
             onClose={() => setShowNewChat(false)}
             onCreateChat={handleCreateChat}
+            appLanguage={appLanguage}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* GIF PICKER MODAL */}
+      <AnimatePresence>
+        {showGifPicker && (
+          <GifPickerModal
+            isOpen={showGifPicker}
+            onClose={() => setShowGifPicker(false)}
+            onSelectGif={handleSendGif}
+            appLanguage={appLanguage}
           />
         )}
       </AnimatePresence>
@@ -5108,8 +6140,21 @@ export default function App() {
             currentUser={currentUser}
             targetUserId={selectedProfileUserId}
             users={users}
+            appLanguage={appLanguage}
             onClose={() => setSelectedProfileUserId(null)}
             onInitiateCall={(type, user) => initiateCall(type, user)}
+            onReportUser={(reportedUserId, reason) => {
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({
+                  type: "submit_report",
+                  payload: {
+                    reportedUserId,
+                    chatId: activeChatId || "",
+                    reason
+                  }
+                }));
+              }
+            }}
             onUpdateProfile={(updatedUser) => {
               setCurrentUser(updatedUser);
               setUsers(prev => ({
@@ -5153,6 +6198,7 @@ export default function App() {
             }}
             onUpdateChat={handleUpdateChat}
             onDeleteChat={handleDeleteChat}
+            appLanguage={appLanguage}
           />
         )}
       </AnimatePresence>
@@ -5164,6 +6210,7 @@ export default function App() {
         currentUser={currentUser}
         onPurchasePlan={handlePurchasePlan}
         lockedFeatureName={subscriptionLockedFeature}
+        appLanguage={appLanguage}
       />
 
       {/* ADMIN SYSTEM DASHBOARD MODAL */}
@@ -5173,6 +6220,7 @@ export default function App() {
             currentUser={currentUser}
             systemUsers={users}
             onClose={() => setShowAdminDashboard(false)}
+            appLanguage={appLanguage}
             onUpdateUserInParent={(userId, updates) => {
               setUsers(prev => {
                 if (!prev[userId]) return prev;
@@ -5222,27 +6270,36 @@ export default function App() {
             />
 
             {/* Call Header */}
-            <div className="w-full max-w-lg flex items-center justify-between text-white/90">
+            <div className="w-full max-w-lg bg-slate-900/80 border border-slate-800/80 px-4 py-3 rounded-2xl shadow-xl flex items-center justify-between text-white/90">
               <div className="flex items-center gap-3">
                 <div className={`w-10 h-10 rounded-2xl flex items-center justify-center text-lg ${callPartner.avatarColor || 'bg-slate-800'}`}>
                   {callPartner.avatarEmoji || '👤'}
                 </div>
                 <div className="text-right">
-                  <h2 className="text-sm font-black">{callPartner.nickname}</h2>
-                  <p className="text-[10px] text-slate-400">
-                    {callType === 'video' ? 'تماس تصویری فوق امن' : 'تماس صوتی رمزنگاری شده'}
-                  </p>
+                  <h2 className="text-sm font-black text-white">{callPartner.nickname}</h2>
+                  <div className="flex items-center gap-1.5 text-[9px] text-teal-400 font-mono font-bold mt-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>{livekitConnected ? "LiveKit SFU Cloud | HD Voice & Video" : "WebRTC + WebSocket + STUN/TURN | DTLS-SRTP"}</span>
+                  </div>
                 </div>
               </div>
 
-              {callState === 'connected' && (
-                <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
-                  <span className="w-2 h-2 bg-emerald-500 rounded-full animate-ping"></span>
-                  <span className="text-[11px] font-mono font-bold text-emerald-400">
-                    {formatCallDuration(callDuration)}
+              <div className="flex items-center gap-2">
+                {livekitConnected && (
+                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                    <Zap className="w-3 h-3 text-emerald-400" />
+                    <span>LiveKit</span>
                   </span>
-                </div>
-              )}
+                )}
+                {callState === 'connected' && (
+                  <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
+                    <span className="w-2 h-2 bg-emerald-500 rounded-full animate-ping"></span>
+                    <span className="text-[11px] font-mono font-bold text-emerald-400">
+                      {formatCallDuration(callDuration)}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Main Stage (Videos or Avatar visualizer) */}
@@ -5270,7 +6327,7 @@ export default function App() {
                         دوربین طرف مقابل غیرفعال است
                       </span>
                     </div>
-                  ) : remoteStream && remoteStream.getVideoTracks().length > 0 ? (
+                  ) : (remoteStream && remoteStream.getVideoTracks().length > 0) || hasLiveKitVideo ? (
                     <div className="w-full h-full relative">
                       <video
                         ref={(el) => {
@@ -5278,6 +6335,9 @@ export default function App() {
                           if (el && remoteStream && el.srcObject !== remoteStream) {
                             el.srcObject = remoteStream;
                             el.play().catch(e => console.warn("Remote video play error", e));
+                          }
+                          if (el && livekitSessionRef.current) {
+                            livekitSessionRef.current.setVideoElements(el, localVideoRef.current, remoteAudioRef.current);
                           }
                         }}
                         autoPlay
@@ -5287,7 +6347,7 @@ export default function App() {
                       />
                       <div className="absolute top-4 right-4 flex items-center gap-2 text-[10px] text-slate-400 bg-slate-900/80 px-2.5 py-1 rounded-md border border-slate-800 z-10 font-mono">
                         <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
-                        <span>تصویر زنده | کیفیت HD</span>
+                        <span>تصویر زنده | کیفیت HD {livekitConnected ? "(LiveKit Cloud)" : ""}</span>
                       </div>
                     </div>
                   ) : (
@@ -5358,13 +6418,16 @@ export default function App() {
 
                   {/* Local Video (Floating Picture-in-Picture) */}
                   <div className="absolute bottom-4 right-4 w-28 sm:w-36 aspect-video rounded-xl overflow-hidden border border-slate-700 bg-slate-950 shadow-lg z-10">
-                    {localStream && !isCameraOff ? (
+                    {(localStream || livekitConnected) && !isCameraOff ? (
                       <video
                         ref={(el) => {
                           localVideoRef.current = el;
                           if (el && localStream && el.srcObject !== localStream) {
                             el.srcObject = localStream;
                             el.play().catch(e => console.warn("Local video play error", e));
+                          }
+                          if (el && livekitSessionRef.current) {
+                            livekitSessionRef.current.setVideoElements(remoteVideoRef.current, el, remoteAudioRef.current);
                           }
                         }}
                         autoPlay
@@ -5577,12 +6640,17 @@ export default function App() {
               onClick={(e) => e.stopPropagation()}
               className="max-w-4xl max-h-[80vh] rounded-2xl overflow-hidden border border-slate-800/80 shadow-2xl relative"
             >
-              <img
-                src={lightboxUrl}
-                alt={lightboxName}
-                className="max-w-full max-h-[80vh] object-contain rounded-2xl"
-                referrerPolicy="no-referrer"
-              />
+              <picture className="w-full block">
+                <source srcSet={lightboxUrl} type="image/webp" />
+                <img
+                  src={lightboxUrl}
+                  alt={lightboxName || "پیش‌نمایش تصویر در پیام‌رسان پریوو | Privo"}
+                  loading="lazy"
+                  decoding="async"
+                  className="max-w-full max-h-[80vh] object-contain rounded-2xl"
+                  referrerPolicy="no-referrer"
+                />
+              </picture>
             </motion.div>
 
             {/* Footer Tip */}
@@ -5597,12 +6665,234 @@ export default function App() {
       <GeminiLiveModal
         isOpen={showGeminiLive}
         onClose={() => setShowGeminiLive(false)}
+        appLanguage={appLanguage}
         onOpenChatTab={() => {
           setShowAiAssistant(true);
           setAiTab("chat");
         }}
       />
 
-    </div>
+      {/* BULK DELETE MESSAGES MODAL */}
+      <AnimatePresence>
+        {bulkDeleteModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4 dir-rtl select-none"
+            dir="rtl"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl text-right space-y-4"
+            >
+              <div className="flex items-center gap-3 text-rose-400">
+                <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-2xl">
+                  <Trash2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">حذف دسته‌جمعی پیام‌ها</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">{selectedMessageIds.length} پیام انتخاب شده است.</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                لطفاً روش حذف پیام‌های انتخاب شده را مشخص کنید:
+              </p>
+
+              <div className="space-y-2 pt-1">
+                <button
+                  onClick={() => handleBulkDeleteMessages('self')}
+                  className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 text-xs font-bold rounded-2xl transition flex items-center justify-between"
+                >
+                  <span>حذف فقط برای خودم</span>
+                  <span className="text-[10px] text-slate-400">Delete for me</span>
+                </button>
+
+                <button
+                  onClick={() => handleBulkDeleteMessages('everyone')}
+                  className="w-full py-2.5 px-4 bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 text-xs font-bold rounded-2xl transition flex items-center justify-between"
+                >
+                  <span>حذف دوطرفه برای همگان</span>
+                  <span className="text-[10px] text-rose-400">Delete for everyone</span>
+                </button>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800">
+                <button
+                  onClick={() => setBulkDeleteModalOpen(false)}
+                  className="w-full py-2 bg-slate-950 text-slate-400 hover:text-white text-xs font-bold rounded-xl transition"
+                >
+                  انصراف
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* BULK FORWARD MESSAGES MODAL */}
+      <AnimatePresence>
+        {bulkForwardModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4 dir-rtl select-none"
+            dir="rtl"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl text-right space-y-4"
+            >
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-sky-500/10 border border-sky-500/20 text-sky-400 rounded-xl">
+                    <CornerUpLeft className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">هدایت دسته‌جمعی ({selectedMessageIds.length} پیام)</h3>
+                    <p className="text-[10px] text-slate-400">گفتگوی مقصد برای ارسال پیام‌ها را انتخاب کنید</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setBulkForwardModalOpen(false)}
+                  className="p-1.5 text-slate-400 hover:text-white bg-slate-950 rounded-xl border border-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="max-h-60 overflow-y-auto space-y-1.5 pl-1">
+                {chats.filter(c => c.id !== activeChatId).map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => handleBulkForwardMessages(c.id)}
+                    className="w-full p-3 bg-slate-950 hover:bg-slate-800/80 border border-slate-800/80 hover:border-sky-500/40 rounded-2xl transition flex items-center justify-between text-right group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm ${c.avatarColor}`}>
+                        {c.avatarEmoji}
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-white group-hover:text-sky-300 transition">{getChatDisplayName(c)}</h4>
+                        <p className="text-[10px] text-slate-400 mt-0.5">{c.type === 'direct' ? 'گفتگوی خصوصی' : `${c.members.length} عضو`}</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold text-sky-400 bg-sky-500/10 px-2.5 py-1 rounded-lg border border-sky-500/20 group-hover:bg-sky-500 group-hover:text-white transition">
+                      ارسال به این گفت‌گو
+                    </span>
+                  </button>
+                ))}
+                {chats.filter(c => c.id !== activeChatId).length === 0 && (
+                  <p className="text-center text-xs text-slate-500 py-4">گفتگوی دیگری برای ارسال موجود نیست.</p>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ADVANCED CHAT DELETION & CLEAR HISTORY MODAL */}
+      <AnimatePresence>
+        {deleteChatModalTarget && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[180] flex items-center justify-center p-4 dir-rtl select-none"
+            dir="rtl"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl text-right space-y-4"
+            >
+              <div className="flex items-center gap-3 text-rose-400">
+                <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-2xl shrink-0">
+                  <Trash2 className="w-6 h-6" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-base font-bold text-white">مدیریت و حذف گفت‌وگو</h3>
+                  <p className="text-xs text-slate-400 mt-0.5 truncate">
+                    {getChatDisplayName(deleteChatModalTarget)}
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                لطفاً نوع عملیات حذف یا پاکسازی برای این گفتگو را انتخاب کنید:
+              </p>
+
+              <div className="space-y-2 pt-1">
+                {/* Clear Messages History */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleClearChatHistory(deleteChatModalTarget.id);
+                    setDeleteChatModalTarget(null);
+                  }}
+                  className="w-full py-2.5 px-3.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-amber-300 text-xs font-bold rounded-2xl transition flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className="w-4 h-4 text-amber-400" />
+                    <span>پاکسازی تمام پیام‌های گفت‌وگو</span>
+                  </div>
+                  <span className="text-[10px] text-amber-400/60 font-mono">Clear History</span>
+                </button>
+
+                {/* Delete for Me / Leave */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleDeleteChat(deleteChatModalTarget.id, 'self');
+                    setDeleteChatModalTarget(null);
+                  }}
+                  className="w-full py-2.5 px-3.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 text-xs font-bold rounded-2xl transition flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2">
+                    <UserX className="w-4 h-4 text-slate-400" />
+                    <span>حذف فقط برای خودم</span>
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-mono font-bold">Delete for Me</span>
+                </button>
+
+                {/* Delete for Everyone */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleDeleteChat(deleteChatModalTarget.id, 'everyone');
+                    setDeleteChatModalTarget(null);
+                  }}
+                  className="w-full py-2.5 px-3.5 bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 text-xs font-bold rounded-2xl transition flex items-center justify-between shadow-lg shadow-rose-950/40"
+                >
+                  <div className="flex items-center gap-2">
+                    <Trash2 className="w-4 h-4 text-rose-400" />
+                    <span>حذف دوطرفه برای همه اعضا</span>
+                  </div>
+                  <span className="text-[10px] text-rose-400/80 font-mono font-bold">Delete for All</span>
+                </button>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setDeleteChatModalTarget(null)}
+                  className="w-full py-2 bg-slate-950 text-slate-400 hover:text-white text-xs font-bold rounded-xl transition"
+                >
+                  انصراف
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+    </main>
   );
 }

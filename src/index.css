@@ -1,8 +1,14 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Vazirmatn:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800;900&family=Syne:wght@700;800;900&family=Orbitron:wght@700;800;900&family=Space+Grotesk:wght@600;700&family=Vazirmatn:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
+.font-privo {
+  font-family: 'Plus Jakarta Sans', 'Syne', 'Orbitron', 'Space Grotesk', sans-serif;
+  letter-spacing: 0.18em;
+  font-weight: 900;
+}
+
 @theme {
-  --font-sans: "Vazirmatn", "Inter", system-ui, sans-serif;
+  --font-sans: "Vazirmatn", "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", monospace;
 }
 
@@ -29,6 +35,9 @@ body {
   font-family: var(--font-sans);
   background-color: #0f172a;
   color: #f8fafc;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 /* Smooth active theme transitions */
@@ -65,3 +74,37 @@ body {
 .glow-neon-dual-plus {
   animation: pulseGlow 3s ease-in-out infinite;
 }
+
+/* Low RAM / Ultra Smooth Mode: Disable all GPU-heavy animations, blurs, transitions, shadows, and filters */
+.low-ram-mode *,
+.low-ram-mode *::before,
+.low-ram-mode *::after {
+  animation: none !important;
+  transition: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  will-change: auto !important;
+  filter: none !important;
+}
+
+/* Ensure glassmorphism elements stay readable with solid dark background */
+.low-ram-mode .backdrop-blur,
+.low-ram-mode .backdrop-blur-sm,
+.low-ram-mode .backdrop-blur-md,
+.low-ram-mode .backdrop-blur-lg,
+.low-ram-mode .backdrop-blur-xl,
+.low-ram-mode .backdrop-blur-2xl {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background-color: rgba(15, 23, 42, 0.98) !important;
+}
+
+.low-ram-mode .animate-spin,
+.low-ram-mode .animate-pulse,
+.low-ram-mode .animate-bounce,
+.low-ram-mode .animate-ping {
+  animation: none !important;
+}
+

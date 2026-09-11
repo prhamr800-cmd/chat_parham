@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from "react";
 import { 
   Shield, Lock, User, KeyRound, Sparkles, AlertCircle, Fingerprint, 
-  ArrowRight, Check, Copy, RefreshCw, Smartphone, Mail, Key, CheckCircle2, HelpCircle
+  ArrowRight, Check, Copy, RefreshCw, Smartphone, Mail, Key, CheckCircle2, HelpCircle, Globe
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { generateE2EKeyPair } from "../utils/crypto";
+import { PrivoLogo } from "./PrivoLogo";
 
 interface AuthScreenProps {
   onAuthSuccess: (user: any, privateKey: string) => void;
+  appLanguage?: 'fa' | 'en';
+  onToggleLanguage?: (lang: 'fa' | 'en') => void;
 }
 
-export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
+export default function AuthScreen({ onAuthSuccess, appLanguage = 'fa', onToggleLanguage }: AuthScreenProps) {
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState(() => localStorage.getItem("parham_saved_username") || "");
   const [password, setPassword] = useState(() => localStorage.getItem("parham_saved_password") || "");
@@ -28,7 +31,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [otpSuccessMessage, setOtpSuccessMessage] = useState("");
-  const [devOtpCode, setDevOtpCode] = useState<string | null>(null);
 
   // 2FA variables
   const [show2FA, setShow2FA] = useState(false);
@@ -254,9 +256,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       }
 
       setOtpSuccessMessage(data.message || "کد تایید ۶ رقمی به ایمیل شما ارسال شد.");
-      if (data.otpCode) {
-        setDevOtpCode(data.otpCode);
-      }
       setForgotPasswordStep("enter_otp");
       setLoading(false);
     } catch (err: any) {
@@ -393,7 +392,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-950 font-sans relative overflow-hidden dir-rtl" dir="rtl">
+    <main id="main-content" role="main" className={`min-h-screen flex items-center justify-center p-4 bg-slate-950 font-sans relative overflow-hidden ${appLanguage === 'fa' ? 'dir-rtl' : 'dir-ltr'}`} dir={appLanguage === 'fa' ? 'rtl' : 'ltr'}>
       {/* Premium Cyber Technology Grid Overlay */}
       <div 
         className="absolute inset-0 opacity-20 pointer-events-none"
@@ -446,17 +445,39 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
       <div className="w-full max-w-md bg-slate-900/80 border border-slate-800/85 rounded-3xl shadow-[0_0_50px_rgba(30,41,59,0.5)] p-6 backdrop-blur-2xl relative z-10 hover:border-slate-700/60 transition-colors duration-500">
         
+        {/* Language Switcher Bar */}
+        <div className="flex justify-end mb-2">
+          {onToggleLanguage && (
+            <div className="inline-flex items-center gap-1 bg-slate-950/80 border border-slate-800/80 p-1 rounded-full text-xs">
+              <button
+                type="button"
+                onClick={() => onToggleLanguage('fa')}
+                className={`px-2.5 py-0.5 rounded-full font-bold transition-all ${appLanguage === 'fa' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
+              >
+                فارسی
+              </button>
+              <button
+                type="button"
+                onClick={() => onToggleLanguage('en')}
+                className={`px-2.5 py-0.5 rounded-full font-bold transition-all ${appLanguage === 'en' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
+              >
+                English
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Brand Header */}
         <div className="text-center mb-6">
           <div className="relative inline-flex items-center justify-center mb-3">
-            {/* Pulsing ring behind logo */}
-            <div className="absolute inset-0 bg-blue-500/20 rounded-2xl blur-md scale-125 animate-pulse"></div>
-            <div className="relative p-3.5 bg-gradient-to-br from-blue-500/10 to-indigo-500/10 border border-blue-500/30 text-blue-400 rounded-2xl shadow-inner shadow-blue-500/10">
-              <Shield className="w-8 h-8 animate-pulse" />
-            </div>
+            <PrivoLogo size={52} glow className="w-13 h-13" />
           </div>
-          <h1 className="text-2xl font-extrabold text-white tracking-tight">پیام‌رسان امن پرهام</h1>
-          <p className="text-xs text-slate-400 mt-1.5 font-medium">پلتفرم چت خصوصی با رمزنگاری سرتاسری (E2EE)</p>
+          <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-slate-200 to-slate-400 font-privo tracking-widest uppercase">
+            PRIVO
+          </h1>
+          <p className="text-xs text-slate-400 mt-1 font-medium">
+            {appLanguage === 'en' ? 'Secure end-to-end encrypted messaging platform' : 'پلتفرم پیام‌رسان امن اختصاصی با رمزنگاری سرتاسری (E2EE)'}
+          </p>
         </div>
 
         <AnimatePresence mode="wait">
@@ -496,11 +517,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
                   <div>
                     <p className="leading-relaxed font-medium">{otpSuccessMessage}</p>
-                    {devOtpCode && (
-                      <p className="mt-1 text-[11px] font-mono text-amber-400 bg-amber-950/40 p-1.5 rounded border border-amber-800/40">
-                        🔑 کد تایید شما: <span className="font-bold tracking-widest text-white">{devOtpCode}</span>
-                      </p>
-                    )}
                   </div>
                 </div>
               )}
@@ -933,6 +949,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           )}
         </AnimatePresence>
       </div>
-    </div>
+    </main>
   );
 }
